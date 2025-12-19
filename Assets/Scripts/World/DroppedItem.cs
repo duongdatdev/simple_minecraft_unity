@@ -13,9 +13,10 @@ public class DroppedItem : MonoBehaviour
     public ItemStack itemStack;
 
     [Header("Pickup Settings")]
-    public float pickupRadius = 1.5f;
+    public float pickupRadius = 3.0f; // Magnet radius
+    public float pickupDistance = 1.0f; // Actual pickup distance
     public float pickupDelay = 0.5f; // delay before can be picked up (prevent instant pickup)
-    public float magnetSpeed = 5f; // speed item moves towards player
+    public float magnetSpeed = 8f; // speed item moves towards player
     
     [Header("Lifetime")]
     public float lifetime = 300f; // 5 minutes before despawn
@@ -42,7 +43,12 @@ public class DroppedItem : MonoBehaviour
         rb.linearDamping = 1f;
         rb.angularDamping = 0.5f;
         
-        // Setup collider
+        // Setup physics collider (BoxCollider) to prevent falling through ground
+        BoxCollider physicsCollider = gameObject.AddComponent<BoxCollider>();
+        physicsCollider.size = new Vector3(0.3f, 0.3f, 0.3f);
+        physicsCollider.isTrigger = false;
+        
+        // Setup pickup collider (SphereCollider)
         pickupCollider.isTrigger = true;
         pickupCollider.radius = pickupRadius;
         
@@ -73,8 +79,17 @@ public class DroppedItem : MonoBehaviour
         // Magnet effect towards player (if close enough)
         if (targetPlayer != null && Time.time - spawnTime > pickupDelay)
         {
+            float distance = Vector3.Distance(transform.position, targetPlayer.position);
+
+            // Move towards player
             Vector3 direction = (targetPlayer.position - transform.position).normalized;
-            rb.linearVelocity = direction * magnetSpeed;
+            rb.linearVelocity = Vector3.Lerp(rb.linearVelocity, direction * magnetSpeed, Time.deltaTime * 5f);
+
+            // Pickup if close enough
+            if (distance < pickupDistance)
+            {
+                TryPickup(targetPlayer.gameObject);
+            }
         }
     }
 
@@ -83,7 +98,7 @@ public class DroppedItem : MonoBehaviour
         // Check if player entered pickup range
         if (other.CompareTag("Player"))
         {
-            TryPickup(other.gameObject);
+            targetPlayer = other.transform;
         }
     }
 
@@ -159,21 +174,30 @@ public class DroppedItem : MonoBehaviour
     {
         if (itemStack == null || itemStack.IsEmpty()) return;
         
-        // TODO: Instantiate proper 3D model based on item type
-        // For now, we can use a simple cube or sprite
-        
         if (visualModel == null)
         {
-            // Create simple cube for now
-            visualModel = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            visualModel = new GameObject("Visual");
             visualModel.transform.SetParent(transform);
             visualModel.transform.localPosition = Vector3.zero;
-            visualModel.transform.localScale = Vector3.one * 0.3f;
-            
-            // Remove collider from visual (we use the trigger collider on parent)
-            Destroy(visualModel.GetComponent<Collider>());
-            
-            // TODO: Apply item texture/material
+            visualModel.transform.localScale = Vector3.one * 0.5f;
+        }
+
+        // Try to use SpriteRenderer
+        SpriteRenderer sr = visualModel.GetComponent<SpriteRenderer>();
+        if (sr == null) sr = visualModel.AddComponent<SpriteRenderer>();
+
+        if (itemStack.item != null && itemStack.item.icon != null)
+        {
+            sr.sprite = itemStack.item.icon;
+        }
+        else
+        {
+            // Fallback: Create a cube if no icon
+            GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            cube.transform.SetParent(visualModel.transform);
+            cube.transform.localPosition = Vector3.zero;
+            cube.transform.localScale = Vector3.one;
+            Destroy(cube.GetComponent<Collider>());
         }
     }
 
@@ -200,12 +224,11 @@ public class DroppedItem : MonoBehaviour
         {
             GameObject obj = new GameObject("DroppedItem");
             obj.transform.position = position;
-            obj.tag = "Item";
+            obj.tag = "Item"; 
             obj.layer = LayerMask.NameToLayer("Default");
             
             DroppedItem item = obj.AddComponent<DroppedItem>();
-            obj.AddComponent<Rigidbody>();
-            obj.AddComponent<SphereCollider>();
+            // Rigidbody and SphereCollider are added automatically via [RequireComponent]
             
             item.Initialize(stack);
             

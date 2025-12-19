@@ -19,10 +19,14 @@ public class ItemDatabase : MonoBehaviour
     public Sprite waterBlockIcon;
     public Sprite glassBlockIcon;
     public Sprite diamondBlockIcon;
+    public Sprite ironOreIcon;
 
     // Additional blocks
     public Sprite planksBlockIcon;
     public Sprite craftingTableIcon;
+
+    // Materials
+    public Sprite ironIngotIcon;
 
     [Header("Tool Icons")]
     public Sprite woodenPickaxeIcon;
@@ -62,10 +66,14 @@ public class ItemDatabase : MonoBehaviour
         RegisterItem(CreateBlockItem("water", "Water", BlockType.Water, waterBlockIcon));
         RegisterItem(CreateBlockItem("glass", "Glass", BlockType.Glass, glassBlockIcon));
         RegisterItem(CreateBlockItem("diamond_block", "Diamond Block", BlockType.DiamondBlock, diamondBlockIcon));
+        RegisterItem(CreateBlockItem("iron_ore", "Iron Ore", BlockType.IronOre, ironOreIcon));
 
         // Wooden Planks and Crafting Table
         RegisterItem(CreateBlockItem("planks", "Wooden Planks", BlockType.Planks, planksBlockIcon));
         RegisterItem(CreateBlockItem("crafting_table", "Crafting Table", BlockType.CraftingTable, craftingTableIcon));
+
+        // Materials
+        RegisterItem(CreateMaterialItem("iron_ingot", "Iron Ingot", ironIngotIcon));
 
         // TOOLS - Pickaxes
         RegisterItem(CreateToolItem("wooden_pickaxe", "Wooden Pickaxe", ToolType.Pickaxe, ToolTier.Wood, 60, woodenPickaxeIcon));
@@ -109,6 +117,19 @@ public class ItemDatabase : MonoBehaviour
             durability = durability,
             icon = icon,
             maxStackSize = 1 // tools don't stack
+        };
+        return item;
+    }
+
+    /// <summary>
+    /// Create a material item
+    /// </summary>
+    private Item CreateMaterialItem(string name, string displayName, Sprite icon)
+    {
+        Item item = new Item(name, displayName, ItemType.Material)
+        {
+            icon = icon,
+            maxStackSize = 64
         };
         return item;
     }

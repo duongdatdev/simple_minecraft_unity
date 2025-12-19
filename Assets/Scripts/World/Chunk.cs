@@ -149,7 +149,7 @@ public class Chunk : MonoBehaviour
         float heightNoiseScale, int heightNoiseOctaves, float heightNoisePersistence, float heightNoiseLacunarity,
         float heightAmplitude, Vector2 heightOffset,
         bool enableCaves, float caveThreshold, float caveScale, int caveOctaves, Vector3 caveOffset,
-        int seed)
+        int seed, bool buildMesh = true)
     {
         this.chunkX = chunkX;
         this.chunkZ = chunkZ;
@@ -172,8 +172,11 @@ public class Chunk : MonoBehaviour
         // PopulateOakTrees(seed, attempts: 12, chance: 0.18f, minTrunk: 4, maxTrunk: 6, leafRadius: 2);
         ComputeInitialSkylight();
 
-        BuildMesh(); // initial mesh build (not throttled)
-        UpdateCollider(); // initial collider
+        if (buildMesh)
+        {
+            BuildMesh(); // initial mesh build (not throttled)
+            UpdateCollider(); // initial collider
+        }
     }
 
     private void GenerateBlocksFromNoise()
@@ -194,7 +197,20 @@ public class Chunk : MonoBehaviour
                 for (int y = 0; y < BlockData.ChunkHeight; y++)
                 {
                     if (y < columnHeight && y > columnHeight - 4) blocks[lx, y, lz] = BlockType.Dirt;
-                    else if (y <= columnHeight - 4) blocks[lx, y, lz] = BlockType.Stone;
+                    else if (y <= columnHeight - 4)
+                    {
+                        // Simple Iron Ore generation
+                        // Use 3D noise for veins
+                        float oreNoise = Noise.PerlinNoise3D(globalX, y, globalZ, 2, 0.5f, 2f, 8f, new Vector3(100, 100, 100));
+                        if (oreNoise > 0.5f)
+                        {
+                            blocks[lx, y, lz] = BlockType.IronOre;
+                        }
+                        else
+                        {
+                            blocks[lx, y, lz] = BlockType.Stone;
+                        }
+                    }
                     else if (y == columnHeight) blocks[lx, y, lz] = BlockType.Grass;
                     else blocks[lx, y, lz] = BlockType.Air;
                 }
@@ -353,11 +369,13 @@ public class Chunk : MonoBehaviour
             float lightNorm = Mathf.Clamp01(finalLightValue / 15f);
             Color tint = info.tint;
             
-            byte r = (byte)(tint.r * lightNorm * 255f);
-            byte g = (byte)(tint.g * lightNorm * 255f);
-            byte b = (byte)(tint.b * lightNorm * 255f);
+            // New Encoding: RGB = Tint Color, A = Light Level
+            byte r = (byte)(tint.r * 255f);
+            byte g = (byte)(tint.g * 255f);
+            byte b = (byte)(tint.b * 255f);
+            byte a = (byte)(lightNorm * 255f);
             
-            colors[i] = new Color32(r, g, b, 255);
+            colors[i] = new Color32(r, g, b, a);
         }
 
         mesh.colors32 = colors;
@@ -622,11 +640,9 @@ public class Chunk : MonoBehaviour
         {
             applyTint = true; // Leaves are tinted on all faces
         }
-        else if (data != null && data.useBiomeTint)
+        else if (type == BlockType.Grass)
         {
-            // Grass/etc: Tint top face fully, and side faces with gradient (if it's Grass)
-            if (face == 2) applyTint = true; // Top
-            else if (type == BlockType.Grass && face != 3) applyTint = true; // Sides (not bottom)
+            applyTint = true; // All faces (shader handles masking)
         }
 
         if (applyTint)
@@ -650,20 +666,9 @@ public class Chunk : MonoBehaviour
             Color finalColor = Color.white;
             if (applyTint)
             {
-                if (type == BlockType.Leaves || face == 2)
-                {
-                    // Full tint for Leaves or Top face of Grass
-                    finalColor = biomeColor;
-                }
-                else
-                {
-                    // Side face of Grass: Gradient tint
-                    // Top vertices (y=1) get biomeColor, Bottom vertices (y=0) get white
-                    if (BlockData.Verts[fv[i]].y > 0.5f)
-                        finalColor = biomeColor;
-                    else
-                        finalColor = Color.white;
-                }
+                // Apply biome tint to all vertices of the face.
+                // The shader will handle masking based on texture saturation (keeping dirt brown, tinting grey grass).
+                finalColor = biomeColor;
             }
             vertexTints[i] = finalColor;
             colors.Add(finalColor);

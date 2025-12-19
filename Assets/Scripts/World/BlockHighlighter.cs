@@ -114,18 +114,22 @@ public class BlockHighlighterLines : MonoBehaviour
         // Bắn ray
         if (Physics.Raycast(ray, out RaycastHit hit, maxDistance, blockLayer.value))
         {
-            // Nếu trúng Player thì bỏ qua hoặc tìm hit kế tiếp
-            if (hit.collider != null && hit.collider.CompareTag("Player"))
+            // Check if we hit a chunk
+            Chunk chunk = hit.collider.GetComponent<Chunk>();
+
+            // If not a chunk (e.g. Player, Item, etc.), try to find one behind it
+            if (chunk == null)
             {
-                // thử tìm hit kế tiếp (nếu có)
                 RaycastHit[] hits = Physics.RaycastAll(ray, maxDistance, blockLayer.value);
                 System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
                 bool found = false;
                 foreach (var h in hits)
                 {
-                    if (h.collider != null && !h.collider.CompareTag("Player"))
+                    Chunk c = h.collider.GetComponent<Chunk>();
+                    if (c != null)
                     {
                         hit = h;
+                        chunk = c; // Found a chunk
                         found = true;
                         break;
                     }
@@ -133,7 +137,7 @@ public class BlockHighlighterLines : MonoBehaviour
 
                 if (!found)
                 {
-                    // không có block nào khác -> clear target
+                    // No chunk found
                     hasTarget = false;
                     targetChunkTransform = null;
                     return;

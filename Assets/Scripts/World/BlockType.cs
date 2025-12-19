@@ -11,5 +11,6 @@ public enum BlockType
     Glass,
     DiamondBlock,
     Planks,
-    CraftingTable
+    CraftingTable,
+    IronOre
 }
