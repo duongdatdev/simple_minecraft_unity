@@ -38,80 +38,148 @@ public class BlockTextureDataEditor : Editor
         // Let's search in the whole project or just the current folder? 
         // Searching whole project is safer but slower. Let's search in the same folder first.
         
-        string[] guids = AssetDatabase.FindAssets("t:Texture2D", new[] { directory });
-        
-        // If not found, maybe try a "Textures" folder up one level?
-        if (guids.Length == 0)
+        // Prefer searching for Sprite assets in project BlockTextures folder if it exists
+        List<string> searchFolders = new List<string>();
+        string blockTexturesPath = "Assets/Resources/BlockTextures";
+        if (Directory.Exists(blockTexturesPath)) searchFolders.Add(blockTexturesPath);
+        string blockSub = Path.Combine(blockTexturesPath, "block");
+        if (Directory.Exists(blockSub)) searchFolders.Add(blockSub);
+
+        string[] guids = new string[0];
+        // Try preferred folders first
+        foreach (var folder in searchFolders)
         {
-            guids = AssetDatabase.FindAssets("t:Texture2D"); // Search everywhere if nothing local
+            guids = AssetDatabase.FindAssets("t:Sprite", new[] { folder });
+            if (guids.Length > 0)
+            {
+                Debug.Log($"AutoAssign: using sprites from {folder}");
+                break;
+            }
         }
 
-        List<Texture2D> candidates = new List<Texture2D>();
+        // If nothing found in preferred folders, search the same directory, then whole project
+        if (guids.Length == 0)
+        {
+            guids = AssetDatabase.FindAssets("t:Sprite", new[] { directory });
+            if (guids.Length == 0)
+            {
+                // Fallback to searching whole project for sprites, then textures
+                guids = AssetDatabase.FindAssets("t:Sprite");
+                if (guids.Length == 0) guids = AssetDatabase.FindAssets("t:Texture2D");
+            }
+        }
+
+        List<Sprite> spriteCandidates = new List<Sprite>();
+        List<Texture2D> textureCandidates = new List<Texture2D>();
+
         foreach (var guid in guids)
         {
             string path = AssetDatabase.GUIDToAssetPath(guid);
-            Texture2D tex = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
-            if (tex != null) candidates.Add(tex);
+            Sprite sp = AssetDatabase.LoadAssetAtPath<Sprite>(path);
+            if (sp != null) spriteCandidates.Add(sp);
+            else
+            {
+                Texture2D tex = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+                if (tex != null) textureCandidates.Add(tex);
+            }
         }
 
         // Helper to find best match
-        Texture2D FindMatch(string suffix)
+        // Helper searches prefer sprites first
+        Sprite FindSpriteMatch(string suffix)
         {
-            // 1. Try exact match with snake_case: crafting_table_top
-            string snake = ToSnakeCase(baseName); // CraftingTable -> crafting_table
-            var match = candidates.FirstOrDefault(t => t.name.Equals($"{snake}_{suffix}", System.StringComparison.OrdinalIgnoreCase));
+            string snake = ToSnakeCase(baseName);
+            var match = spriteCandidates.FirstOrDefault(s => s.name.Equals($"{snake}_{suffix}", System.StringComparison.OrdinalIgnoreCase));
             if (match) return match;
-
-            // 2. Try exact match with PascalCase: CraftingTable_Top
-            match = candidates.FirstOrDefault(t => t.name.Equals($"{baseName}_{suffix}", System.StringComparison.OrdinalIgnoreCase));
+            match = spriteCandidates.FirstOrDefault(s => s.name.Equals($"{baseName}_{suffix}", System.StringComparison.OrdinalIgnoreCase));
             if (match) return match;
+            match = spriteCandidates.FirstOrDefault(s => s.name.Contains(baseName) && s.name.Contains(suffix));
+            return match;
+        }
 
-            // 3. Try contains
-            match = candidates.FirstOrDefault(t => t.name.Contains(baseName) && t.name.Contains(suffix));
+        Texture2D FindTextureMatch(string suffix)
+        {
+            string snake = ToSnakeCase(baseName);
+            var match = textureCandidates.FirstOrDefault(t => t.name.Equals($"{snake}_{suffix}", System.StringComparison.OrdinalIgnoreCase));
+            if (match) return match;
+            match = textureCandidates.FirstOrDefault(t => t.name.Equals($"{baseName}_{suffix}", System.StringComparison.OrdinalIgnoreCase));
+            if (match) return match;
+            match = textureCandidates.FirstOrDefault(t => t.name.Contains(baseName) && t.name.Contains(suffix));
             return match;
         }
 
         bool changed = false;
 
         // Top/Up
-        Texture2D top = FindMatch("top");
-        if (top == null) top = FindMatch("up");
-        if (top != null && data.upTexture != top) { data.upTexture = top; changed = true; }
+        Sprite topSp = FindSpriteMatch("top");
+        if (topSp == null) topSp = FindSpriteMatch("up");
+        if (topSp != null && data.upSprite != topSp) { data.upSprite = topSp; changed = true; }
+        else
+        {
+            Texture2D topTex = FindTextureMatch("top");
+            if (topTex == null) topTex = FindTextureMatch("up");
+            if (topTex != null && data.upSprite == null) { data.upTexture = topTex; data.upSprite = Sprite.Create(topTex, new Rect(0,0,topTex.width, topTex.height), new Vector2(0.5f,0.5f)); changed = true; }
+        }
 
         // Bottom/Down
-        Texture2D bottom = FindMatch("bottom");
-        if (bottom == null) bottom = FindMatch("down");
-        // Fallback: if no bottom, use top? (e.g. planks) - Maybe not auto, let user decide.
-        if (bottom != null && data.downTexture != bottom) { data.downTexture = bottom; changed = true; }
+        Sprite bottomSp = FindSpriteMatch("bottom");
+        if (bottomSp == null) bottomSp = FindSpriteMatch("down");
+        if (bottomSp != null && data.downSprite != bottomSp) { data.downSprite = bottomSp; changed = true; }
+        else
+        {
+            Texture2D bottomTex = FindTextureMatch("bottom");
+            if (bottomTex == null) bottomTex = FindTextureMatch("down");
+            if (bottomTex != null && data.downSprite == null) { data.downTexture = bottomTex; data.downSprite = Sprite.Create(bottomTex, new Rect(0,0,bottomTex.width, bottomTex.height), new Vector2(0.5f,0.5f)); changed = true; }
+        }
 
         // Front
-        Texture2D front = FindMatch("front");
-        if (front != null && data.frontTexture != front) { data.frontTexture = front; changed = true; }
+        Sprite frontSp = FindSpriteMatch("front");
+        if (frontSp != null && data.frontSprite != frontSp) { data.frontSprite = frontSp; changed = true; }
+        else if (data.frontSprite == null)
+        {
+            Texture2D frontTex = FindTextureMatch("front");
+            if (frontTex != null) { data.frontTexture = frontTex; data.frontSprite = Sprite.Create(frontTex, new Rect(0,0,frontTex.width, frontTex.height), new Vector2(0.5f,0.5f)); changed = true; }
+        }
 
         // Back
-        Texture2D back = FindMatch("back");
-        if (back != null && data.backTexture != back) { data.backTexture = back; changed = true; }
+        Sprite backSp = FindSpriteMatch("back");
+        if (backSp != null && data.backSprite != backSp) { data.backSprite = backSp; changed = true; }
+        else if (data.backSprite == null)
+        {
+            Texture2D backTex = FindTextureMatch("back");
+            if (backTex != null) { data.backTexture = backTex; data.backSprite = Sprite.Create(backTex, new Rect(0,0,backTex.width, backTex.height), new Vector2(0.5f,0.5f)); changed = true; }
+        }
 
         // Left
-        Texture2D left = FindMatch("left");
-        if (left != null && data.leftTexture != left) { data.leftTexture = left; changed = true; }
+        Sprite leftSp = FindSpriteMatch("left");
+        if (leftSp != null && data.leftSprite != leftSp) { data.leftSprite = leftSp; changed = true; }
+        else if (data.leftSprite == null)
+        {
+            Texture2D leftTex = FindTextureMatch("left");
+            if (leftTex != null) { data.leftTexture = leftTex; data.leftSprite = Sprite.Create(leftTex, new Rect(0,0,leftTex.width, leftTex.height), new Vector2(0.5f,0.5f)); changed = true; }
+        }
 
         // Right
-        Texture2D right = FindMatch("right");
-        if (right != null && data.rightTexture != right) { data.rightTexture = right; changed = true; }
+        Sprite rightSp = FindSpriteMatch("right");
+        if (rightSp != null && data.rightSprite != rightSp) { data.rightSprite = rightSp; changed = true; }
+        else if (data.rightSprite == null)
+        {
+            Texture2D rightTex = FindTextureMatch("right");
+            if (rightTex != null) { data.rightTexture = rightTex; data.rightSprite = Sprite.Create(rightTex, new Rect(0,0,rightTex.width, rightTex.height), new Vector2(0.5f,0.5f)); changed = true; }
+        }
 
         // Side (Generic)
-        Texture2D side = FindMatch("side");
-        if (side != null)
+        Sprite sideSp = FindSpriteMatch("side");
+        if (sideSp != null)
         {
-            if (data.frontTexture == null) { data.frontTexture = side; changed = true; }
-            if (data.backTexture == null) { data.backTexture = side; changed = true; }
-            if (data.leftTexture == null) { data.leftTexture = side; changed = true; }
-            if (data.rightTexture == null) { data.rightTexture = side; changed = true; }
+            if (data.frontSprite == null) { data.frontSprite = sideSp; changed = true; }
+            if (data.backSprite == null) { data.backSprite = sideSp; changed = true; }
+            if (data.leftSprite == null) { data.leftSprite = sideSp; changed = true; }
+            if (data.rightSprite == null) { data.rightSprite = sideSp; changed = true; }
         }
 
         // Fallback: if "top" exists but "bottom" is null, use top?
-        if (data.upTexture != null && data.downTexture == null) { data.downTexture = data.upTexture; changed = true; }
+        if (data.upSprite != null && data.downSprite == null) { data.downSprite = data.upSprite; changed = true; }
         
         // Fallback: if "front" exists but others are null? (Maybe it's a directional block like furnace)
         // If we have side, we used it. If we don't have side, but have front... 

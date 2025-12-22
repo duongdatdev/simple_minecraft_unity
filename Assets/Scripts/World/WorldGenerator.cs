@@ -42,7 +42,7 @@ public class WorldGenerator : MonoBehaviour
 
     // queue data structures for rebuild throttling
     private readonly HashSet<Chunk> dirtyChunks = new HashSet<Chunk>();
-    private readonly Queue<Chunk> rebuildQueue = new Queue<Chunk>();
+    private readonly List<Chunk> rebuildQueue = new List<Chunk>();
 
     // Chunks waiting for neighbors to be generated before they can be decorated (trees) and lit
     private HashSet<Chunk> pendingChunks = new HashSet<Chunk>();
@@ -243,7 +243,21 @@ public class WorldGenerator : MonoBehaviour
                 chunk.PopulateOakTrees(seed, attempts: 12, chance: 0.18f, minTrunk: 4, maxTrunk: 6, leafRadius: 2);
                 
                 // 2. Compute Light (needs neighbors for smooth light)
+                // Recompute for this chunk and also request recompute for surrounding chunks so skylight across boundaries is consistent.
                 chunk.RecomputeSkylightAndUpdateMesh();
+
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    for (int dz = -1; dz <= 1; dz++)
+                    {
+                        if (dx == 0 && dz == 0) continue;
+                        Chunk neighbor = FindChunkAt(chunk.ChunkX + dx, chunk.ChunkZ + dz);
+                        if (neighbor != null)
+                        {
+                            neighbor.RecomputeSkylightAndUpdateMesh();
+                        }
+                    }
+                }
 
                 toRemove.Add(chunk);
                 processed++;
@@ -321,8 +335,31 @@ public class WorldGenerator : MonoBehaviour
         int lx = gx - chunkX * BlockData.ChunkWidth;
         int lz = gz - chunkZ * BlockData.ChunkWidth;
 
+        // get current type to detect opacity changes
+        BlockType oldType = chunk.GetBlockLocal(lx, y, lz);
+
         // set local block
         chunk.SetBlockLocal(lx, y, lz, type);
+
+        // If opacity changed (for example placing/removing leaves), recompute skylight for this chunk and neighbors immediately
+        bool oldOpaque = BlockData.IsOpaque(oldType);
+        bool newOpaque = BlockData.IsOpaque(type);
+        if (oldOpaque != newOpaque)
+        {
+            // recompute skylight and request rebuild for this chunk and its 3x3 neighborhood so light stays consistent
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                for (int dz = -1; dz <= 1; dz++)
+                {
+                    Chunk n = FindChunkAt(chunkX + dx, chunkZ + dz);
+                    if (n != null) n.RecomputeSkylightAndUpdateMesh();
+                }
+            }
+
+            // We still enqueue chunk(s) for rebuild propagation and collider handling
+            EnqueueChunkForRebuild(chunk);
+            return;
+        }
 
         // enqueue rebuild for this chunk and neighbors if on boundary
         EnqueueChunkForRebuild(chunk);
@@ -356,7 +393,7 @@ public class WorldGenerator : MonoBehaviour
         if (chunk == null) return;
         if (dirtyChunks.Add(chunk))
         {
-            rebuildQueue.Enqueue(chunk);
+            rebuildQueue.Add(chunk);
             chunk.MarkDirtyTimestamp(Time.time);
         }
     }
@@ -364,10 +401,27 @@ public class WorldGenerator : MonoBehaviour
     // Process limited number of rebuilds per frame
     private void ProcessRebuildQueue()
     {
+        if (rebuildQueue.Count == 0) return;
+
+        if (player != null)
+        {
+            Vector3 playerPos = player.position;
+            rebuildQueue.Sort((a, b) =>
+            {
+                if (a == null) return 1;
+                if (b == null) return -1;
+                float distA = Vector3.SqrMagnitude(a.transform.position - playerPos);
+                float distB = Vector3.SqrMagnitude(b.transform.position - playerPos);
+                return distA.CompareTo(distB);
+            });
+        }
+
         int processed = 0;
         while (processed < maxRebuildsPerFrame && rebuildQueue.Count > 0)
         {
-            Chunk c = rebuildQueue.Dequeue();
+            Chunk c = rebuildQueue[0];
+            rebuildQueue.RemoveAt(0);
+            
             // if chunk was unregistered or null skip
             if (c == null) continue;
 

@@ -44,37 +44,76 @@ public class AtlasPacker : EditorWindow
             if (data != null) blockDataList.Add(data);
         }
 
-        // 2. Collect unique textures
-        HashSet<Texture2D> uniqueTextures = new HashSet<Texture2D>();
+        // 2. Collect unique sprites (use sprite.texture & rect when copying).
+        //    If a BlockTextureData has legacy Texture2D assigned but no Sprite, create a temporary Sprite from it so it can be packed.
+        HashSet<Sprite> uniqueSprites = new HashSet<Sprite>();
+        List<Sprite> tempCreatedSprites = new List<Sprite>();
         foreach (var data in blockDataList)
         {
-            if (data.upTexture) uniqueTextures.Add(data.upTexture);
-            if (data.downTexture) uniqueTextures.Add(data.downTexture);
-            if (data.frontTexture) uniqueTextures.Add(data.frontTexture);
-            if (data.backTexture) uniqueTextures.Add(data.backTexture);
-            if (data.leftTexture) uniqueTextures.Add(data.leftTexture);
-            if (data.rightTexture) uniqueTextures.Add(data.rightTexture);
+            if (data.upSprite) uniqueSprites.Add(data.upSprite);
+            else if (data.upTexture != null)
+            {
+                Sprite s = Sprite.Create(data.upTexture, new Rect(0, 0, data.upTexture.width, data.upTexture.height), new Vector2(0.5f, 0.5f), 100f);
+                uniqueSprites.Add(s);
+                tempCreatedSprites.Add(s);
+            }
+
+            if (data.downSprite) uniqueSprites.Add(data.downSprite);
+            else if (data.downTexture != null)
+            {
+                Sprite s = Sprite.Create(data.downTexture, new Rect(0, 0, data.downTexture.width, data.downTexture.height), new Vector2(0.5f, 0.5f), 100f);
+                uniqueSprites.Add(s);
+                tempCreatedSprites.Add(s);
+            }
+
+            if (data.frontSprite) uniqueSprites.Add(data.frontSprite);
+            else if (data.frontTexture != null)
+            {
+                Sprite s = Sprite.Create(data.frontTexture, new Rect(0, 0, data.frontTexture.width, data.frontTexture.height), new Vector2(0.5f, 0.5f), 100f);
+                uniqueSprites.Add(s);
+                tempCreatedSprites.Add(s);
+            }
+
+            if (data.backSprite) uniqueSprites.Add(data.backSprite);
+            else if (data.backTexture != null)
+            {
+                Sprite s = Sprite.Create(data.backTexture, new Rect(0, 0, data.backTexture.width, data.backTexture.height), new Vector2(0.5f, 0.5f), 100f);
+                uniqueSprites.Add(s);
+                tempCreatedSprites.Add(s);
+            }
+
+            if (data.leftSprite) uniqueSprites.Add(data.leftSprite);
+            else if (data.leftTexture != null)
+            {
+                Sprite s = Sprite.Create(data.leftTexture, new Rect(0, 0, data.leftTexture.width, data.leftTexture.height), new Vector2(0.5f, 0.5f), 100f);
+                uniqueSprites.Add(s);
+                tempCreatedSprites.Add(s);
+            }
+
+            if (data.rightSprite) uniqueSprites.Add(data.rightSprite);
+            else if (data.rightTexture != null)
+            {
+                Sprite s = Sprite.Create(data.rightTexture, new Rect(0, 0, data.rightTexture.width, data.rightTexture.height), new Vector2(0.5f, 0.5f), 100f);
+                uniqueSprites.Add(s);
+                tempCreatedSprites.Add(s);
+            }
         }
 
-        if (uniqueTextures.Count == 0)
+        if (uniqueSprites.Count == 0)
         {
-            Debug.LogWarning("No textures found in BlockTextureData assets.");
+            Debug.LogWarning("No sprites found in BlockTextureData assets.");
             return;
         }
 
-        List<Texture2D> sortedTextures = uniqueTextures.OrderBy(t => t.name).ToList();
+        List<Sprite> sortedSprites = uniqueSprites.OrderBy(s => s.name).ToList();
 
         // 3. Calculate atlas size
-        int count = sortedTextures.Count;
+        int count = sortedSprites.Count;
         int tilesPerRow = Mathf.CeilToInt(Mathf.Sqrt(count));
         int tilesPerColumn = Mathf.CeilToInt((float)count / tilesPerRow);
 
         int atlasWidth = tilesPerRow * (tileWidth + padding);
         int atlasHeight = tilesPerColumn * (tileHeight + padding);
-
-        // Ensure power of 2? Not strictly necessary but good practice.
-        // atlasWidth = Mathf.NextPowerOfTwo(atlasWidth);
-        // atlasHeight = Mathf.NextPowerOfTwo(atlasHeight);
 
         Texture2D atlas = new Texture2D(atlasWidth, atlasHeight, TextureFormat.RGBA32, false);
         // Clear to transparent
@@ -82,44 +121,47 @@ public class AtlasPacker : EditorWindow
         for (int i = 0; i < clearColors.Length; i++) clearColors[i] = Color.clear;
         atlas.SetPixels(clearColors);
 
-        // 4. Pack textures
-        Dictionary<Texture2D, Vector2Int> texturePositions = new Dictionary<Texture2D, Vector2Int>();
+        // 4. Pack sprites (copy sprite rects)
+        Dictionary<Sprite, Vector2Int> texturePositions = new Dictionary<Sprite, Vector2Int>();
 
         for (int i = 0; i < count; i++)
         {
-            Texture2D tex = sortedTextures[i];
+            Sprite sp = sortedSprites[i];
             int xIndex = i % tilesPerRow;
             int yIndex = i / tilesPerRow;
 
             int xPos = xIndex * (tileWidth + padding);
             int yPos = yIndex * (tileHeight + padding);
 
-            // Read pixels (make sure texture is readable)
-            if (!tex.isReadable)
+            Texture2D tex = sp.texture;
+            Rect rect = sp.rect;
+
+            // Ensure the source texture is readable
+            string texPath = AssetDatabase.GetAssetPath(tex);
+            TextureImporter importer = AssetImporter.GetAtPath(texPath) as TextureImporter;
+            if (importer != null && !importer.isReadable)
             {
-                string path = AssetDatabase.GetAssetPath(tex);
-                TextureImporter importer = AssetImporter.GetAtPath(path) as TextureImporter;
-                if (importer != null)
-                {
-                    importer.isReadable = true;
-                    importer.SaveAndReimport();
-                }
+                importer.isReadable = true;
+                importer.SaveAndReimport();
             }
 
-            // Resize if needed? For now assume 16x16 or resize
-            Color[] pixels = tex.GetPixels();
-            if (tex.width != tileWidth || tex.height != tileHeight)
+            int srcX = Mathf.RoundToInt(rect.x);
+            int srcY = Mathf.RoundToInt(rect.y);
+            int srcW = Mathf.RoundToInt(rect.width);
+            int srcH = Mathf.RoundToInt(rect.height);
+
+            Color[] pixels = tex.GetPixels(srcX, srcY, srcW, srcH);
+
+            if (srcW != tileWidth || srcH != tileHeight)
             {
-                // Simple resize or warning?
-                Debug.LogWarning($"Texture {tex.name} is {tex.width}x{tex.height}, expected {tileWidth}x{tileHeight}. Resizing...");
-                // Resize logic omitted for brevity, assuming correct size for now or just copying what fits
-                // Actually, let's just copy 0,0 to w,h
+                Debug.LogWarning($"Sprite {sp.name} rect {srcW}x{srcH} != tile {tileWidth}x{tileHeight}. Resizing may be required.");
+                // For simplicity, copy what fits; proper resizing omitted
             }
 
-            atlas.SetPixels(xPos, yPos, tileWidth, tileHeight, pixels);
-            
+            atlas.SetPixels(xPos, yPos, Mathf.Min(srcW, tileWidth), Mathf.Min(srcH, tileHeight), pixels);
+
             // Store position (in tiles)
-            texturePositions[tex] = new Vector2Int(xIndex, yIndex);
+            texturePositions[sp] = new Vector2Int(xIndex, yIndex);
         }
 
         atlas.Apply();
@@ -140,17 +182,53 @@ public class AtlasPacker : EditorWindow
             atlasImporter.SaveAndReimport();
         }
 
-        // 6. Update BlockTextureData assets
+        // 6. Update BlockTextureData assets (set tile coordinates from sprite map)
         foreach (var data in blockDataList)
         {
             Undo.RecordObject(data, "Update Block Texture Coordinates");
 
-            if (data.upTexture && texturePositions.ContainsKey(data.upTexture)) data.up = texturePositions[data.upTexture];
-            if (data.downTexture && texturePositions.ContainsKey(data.downTexture)) data.down = texturePositions[data.downTexture];
-            if (data.frontTexture && texturePositions.ContainsKey(data.frontTexture)) data.front = texturePositions[data.frontTexture];
-            if (data.backTexture && texturePositions.ContainsKey(data.backTexture)) data.back = texturePositions[data.backTexture];
-            if (data.leftTexture && texturePositions.ContainsKey(data.leftTexture)) data.left = texturePositions[data.leftTexture];
-            if (data.rightTexture && texturePositions.ContainsKey(data.rightTexture)) data.right = texturePositions[data.rightTexture];
+            // Prefer direct sprite references
+            if (data.upSprite != null && texturePositions.ContainsKey(data.upSprite)) data.up = texturePositions[data.upSprite];
+            else if (data.upTexture != null)
+            {
+                var found = texturePositions.FirstOrDefault(kv => kv.Key != null && kv.Key.texture == data.upTexture);
+                if (!found.Equals(default(KeyValuePair<Sprite, Vector2Int>))) data.up = found.Value;
+            }
+
+            if (data.downSprite != null && texturePositions.ContainsKey(data.downSprite)) data.down = texturePositions[data.downSprite];
+            else if (data.downTexture != null)
+            {
+                var found = texturePositions.FirstOrDefault(kv => kv.Key != null && kv.Key.texture == data.downTexture);
+                if (!found.Equals(default(KeyValuePair<Sprite, Vector2Int>))) data.down = found.Value;
+            }
+
+            if (data.frontSprite != null && texturePositions.ContainsKey(data.frontSprite)) data.front = texturePositions[data.frontSprite];
+            else if (data.frontTexture != null)
+            {
+                var found = texturePositions.FirstOrDefault(kv => kv.Key != null && kv.Key.texture == data.frontTexture);
+                if (!found.Equals(default(KeyValuePair<Sprite, Vector2Int>))) data.front = found.Value;
+            }
+
+            if (data.backSprite != null && texturePositions.ContainsKey(data.backSprite)) data.back = texturePositions[data.backSprite];
+            else if (data.backTexture != null)
+            {
+                var found = texturePositions.FirstOrDefault(kv => kv.Key != null && kv.Key.texture == data.backTexture);
+                if (!found.Equals(default(KeyValuePair<Sprite, Vector2Int>))) data.back = found.Value;
+            }
+
+            if (data.leftSprite != null && texturePositions.ContainsKey(data.leftSprite)) data.left = texturePositions[data.leftSprite];
+            else if (data.leftTexture != null)
+            {
+                var found = texturePositions.FirstOrDefault(kv => kv.Key != null && kv.Key.texture == data.leftTexture);
+                if (!found.Equals(default(KeyValuePair<Sprite, Vector2Int>))) data.left = found.Value;
+            }
+
+            if (data.rightSprite != null && texturePositions.ContainsKey(data.rightSprite)) data.right = texturePositions[data.rightSprite];
+            else if (data.rightTexture != null)
+            {
+                var found = texturePositions.FirstOrDefault(kv => kv.Key != null && kv.Key.texture == data.rightTexture);
+                if (!found.Equals(default(KeyValuePair<Sprite, Vector2Int>))) data.right = found.Value;
+            }
 
             EditorUtility.SetDirty(data);
         }

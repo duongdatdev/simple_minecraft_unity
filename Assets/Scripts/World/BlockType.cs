@@ -12,5 +12,6 @@ public enum BlockType
     DiamondBlock,
     Planks,
     CraftingTable,
-    IronOre
+    IronOre,
+    Bedrock
 }

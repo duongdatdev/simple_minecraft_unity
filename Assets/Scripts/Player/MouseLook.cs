@@ -24,7 +24,7 @@ public class MouseLook : MonoBehaviour
         xRotation = transform.localEulerAngles.x;
 
         // cache inventory UI if present
-        inventoryUI = FindObjectOfType<InventoryUI>();
+        inventoryUI = Object.FindAnyObjectByType<InventoryUI>();
     }
 
     void Update()
@@ -42,7 +42,7 @@ public class MouseLook : MonoBehaviour
 
         // ensure cached reference (in case InventoryUI is created after this script starts)
         if (inventoryUI == null)
-            inventoryUI = FindObjectOfType<InventoryUI>();
+            inventoryUI = Object.FindAnyObjectByType<InventoryUI>();
 
         // unlock cursor when pressing Escape
         if (Input.GetKeyDown(KeyCode.Escape))

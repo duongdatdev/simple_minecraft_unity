@@ -56,12 +56,50 @@ public static class BlockData
         {
             case BlockType.Air:
                 return false;
-            // Add here any transparent blocks you want light to pass through (like glass, water)
+            // Treat the following as non-opaque for skylight propagation
             case BlockType.Water:
             case BlockType.Glass:
+            case BlockType.Leaves:
                 return false;
             default:
                 return true;
         }
+    }
+
+    /// <summary>
+    /// Return a hardness multiplier for block types used to compute break time.
+    /// 1.0 = baseline. Larger => harder and takes longer to break.
+    /// </summary>
+    public static float GetBlockHardness(BlockType type)
+    {
+        switch (type)
+        {
+            case BlockType.Dirt:
+            case BlockType.Grass:
+                return 0.8f;
+            case BlockType.Sand:
+                return 0.9f;
+            case BlockType.Wood:
+            case BlockType.Planks:
+            case BlockType.CraftingTable:
+                return 1.0f;
+            case BlockType.Stone:
+                return 1.6f;
+            case BlockType.IronOre:
+                return 3.0f;
+            case BlockType.DiamondBlock:
+                return 6.0f;
+            case BlockType.Leaves:
+                return 0.6f;
+            case BlockType.Bedrock:
+                return float.PositiveInfinity; // unbreakable
+            default:
+                return 1.0f;
+        }
+    }
+
+    public static bool IsBreakable(BlockType type)
+    {
+        return type != BlockType.Bedrock;
     }
 }

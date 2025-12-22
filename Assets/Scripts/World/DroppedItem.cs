@@ -27,6 +27,9 @@ public class DroppedItem : MonoBehaviour
     public float bobSpeed = 2f;
     public float bobHeight = 0.3f;
 
+    [Header("Audio")]
+    public AudioClip pickupSound;
+
     private Rigidbody rb;
     private SphereCollider pickupCollider;
     private float spawnTime;
@@ -44,8 +47,12 @@ public class DroppedItem : MonoBehaviour
         rb.angularDamping = 0.5f;
         
         // Setup physics collider (BoxCollider) to prevent falling through ground
-        BoxCollider physicsCollider = gameObject.AddComponent<BoxCollider>();
-        physicsCollider.size = new Vector3(0.3f, 0.3f, 0.3f);
+        BoxCollider physicsCollider = GetComponent<BoxCollider>();
+        if (physicsCollider == null)
+        {
+            physicsCollider = gameObject.AddComponent<BoxCollider>();
+            physicsCollider.size = new Vector3(0.3f, 0.3f, 0.3f);
+        }
         physicsCollider.isTrigger = false;
         
         // Setup pickup collider (SphereCollider)
@@ -120,6 +127,58 @@ public class DroppedItem : MonoBehaviour
     }
 
     /// <summary>
+    /// Initialize the dropped item with an item stack
+    /// </summary>
+    public void SetItem(Item item, int count = 1)
+    {
+        itemStack = new ItemStack(item, count);
+        UpdateVisuals();
+    }
+
+    private void UpdateVisuals()
+    {
+        if (itemStack == null || itemStack.item == null) return;
+
+        // Create visual if missing
+        if (visualModel == null)
+        {
+            visualModel = new GameObject("Visual");
+            visualModel.transform.SetParent(transform, false);
+        }
+
+        // Check if it's a block or item
+        if (itemStack.item.itemType == ItemType.Block)
+        {
+            // Create block mesh (simplified)
+            MeshFilter mf = visualModel.GetComponent<MeshFilter>();
+            if (mf == null) mf = visualModel.AddComponent<MeshFilter>();
+            
+            MeshRenderer mr = visualModel.GetComponent<MeshRenderer>();
+            if (mr == null) mr = visualModel.AddComponent<MeshRenderer>();
+
+            // Create a cube
+            GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            mf.mesh = cube.GetComponent<MeshFilter>().sharedMesh;
+            Destroy(cube);
+
+            // Set texture (this requires a material with the block texture, which is complex to get here without reference)
+            // For now, just set color or leave as default
+            mr.material = new Material(Shader.Find("Standard"));
+            if (itemStack.item.icon != null)
+                mr.material.mainTexture = itemStack.item.icon.texture;
+        }
+        else
+        {
+            // Create sprite for item
+            SpriteRenderer sr = visualModel.GetComponent<SpriteRenderer>();
+            if (sr == null) sr = visualModel.AddComponent<SpriteRenderer>();
+            
+            sr.sprite = itemStack.item.icon;
+            visualModel.transform.localScale = Vector3.one * 0.5f;
+        }
+    }
+
+    /// <summary>
     /// Try to pickup item
     /// </summary>
     private void TryPickup(GameObject player)
@@ -137,7 +196,10 @@ public class DroppedItem : MonoBehaviour
         
         if (added)
         {
-            // TODO: Play pickup sound
+            if (pickupSound != null)
+            {
+                AudioSource.PlayClipAtPoint(pickupSound, transform.position);
+            }
             Debug.Log($"Picked up {itemStack.GetDisplayString()}");
             Destroy(gameObject);
         }

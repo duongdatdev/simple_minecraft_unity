@@ -21,6 +21,11 @@ public class BlockInteraction : MonoBehaviour
     [Header("Inventory Integration")] public Inventory playerInventory;
     public InventoryUI inventoryUI;
 
+    [Header("Audio")]
+    public AudioSource audioSource;
+    public AudioClip breakSound;
+    public AudioClip placeSound;
+
     [Header("Breaking Animation")]
     public float defaultBreakTime = 0.5f;
     public Vector2Int[] breakStageTiles = new Vector2Int[10]; // Coordinates of the 10 break stages in the atlas
@@ -36,9 +41,14 @@ public class BlockInteraction : MonoBehaviour
     void Awake()
     {
         if (playerCamera == null) playerCamera = Camera.main;
-        if (playerInventory == null) playerInventory = FindObjectOfType<Inventory>();
-        if (inventoryUI == null) inventoryUI = FindObjectOfType<InventoryUI>();
+        if (playerInventory == null) playerInventory = Object.FindAnyObjectByType<Inventory>();
+        if (inventoryUI == null) inventoryUI = Object.FindAnyObjectByType<InventoryUI>();
         
+        if (audioSource == null)
+            audioSource = GetComponent<AudioSource>();
+        if (audioSource == null)
+            audioSource = gameObject.AddComponent<AudioSource>();
+
         CreateBreakOverlay();
     }
 
@@ -64,7 +74,37 @@ public class BlockInteraction : MonoBehaviour
 
         if (breakOverlayMaterial != null)
         {
-            breakOverlayRenderer.material = breakOverlayMaterial;
+            // Create a clone to modify settings safely
+            Material overlayMat = new Material(breakOverlayMaterial);
+
+            // Auto-fix: Attempt to enable Alpha Clipping / Cutout mode if the user forgot
+            // Check for URP
+            if (overlayMat.shader.name.Contains("Universal Render Pipeline") || overlayMat.shader.name.Contains("URP"))
+            {
+                if (overlayMat.HasProperty("_AlphaClip"))
+                {
+                    overlayMat.SetFloat("_AlphaClip", 1); // Enable Alpha Clipping
+                    overlayMat.SetFloat("_Cutoff", 0.1f); // Threshold
+                }
+            }
+            // Check for Standard Shader
+            else if (overlayMat.shader.name == "Standard")
+            {
+                overlayMat.SetFloat("_Mode", 1); // 1 = Cutout
+                overlayMat.EnableKeyword("_ALPHATEST_ON");
+                overlayMat.DisableKeyword("_ALPHABLEND_ON");
+                overlayMat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                overlayMat.renderQueue = 2450;
+            }
+            // Check for Legacy Transparent
+            else if (!overlayMat.shader.name.Contains("Transparent") && !overlayMat.shader.name.Contains("Cutout"))
+            {
+                // Try to switch to a cutout shader if it seems to be opaque
+                Shader cutout = Shader.Find("Unlit/Transparent Cutout");
+                if (cutout != null) overlayMat.shader = cutout;
+            }
+
+            breakOverlayRenderer.material = overlayMat;
         }
         else
         {
@@ -78,6 +118,13 @@ public class BlockInteraction : MonoBehaviour
 
     void Update()
     {
+        // Don't interact if paused
+        if (PauseMenu.IsPaused)
+        {
+            ResetBreaking();
+            return;
+        }
+
         // Don't interact with blocks when inventory UI is open
         if (inventoryUI != null && inventoryUI.IsInventoryOpen())
         {
@@ -141,8 +188,18 @@ public class BlockInteraction : MonoBehaviour
             
             Vector3Int targetBlock = new Vector3Int(globalX, ly, globalZ);
             
+            // Check what block we hit
+            BlockType hitBlock = chunkComp.GetBlockLocal(lx, ly, lz);
+
             // Check if block is air (already broken)
-            if (chunkComp.GetBlockLocal(lx, ly, lz) == BlockType.Air)
+            if (hitBlock == BlockType.Air)
+            {
+                ResetBreaking();
+                return;
+            }
+
+            // Prevent breaking unbreakable blocks (bedrock)
+            if (!BlockData.IsBreakable(hitBlock))
             {
                 ResetBreaking();
                 return;
@@ -159,20 +216,27 @@ public class BlockInteraction : MonoBehaviour
                 breakOverlay.SetActive(true);
             }
             
-            // Increase progress
-            // TODO: Adjust speed based on tool efficiency
+            // Increase progress using block hardness and tool speed
             float speedMultiplier = 1.0f;
             if (playerInventory != null)
             {
-                ItemStack tool = playerInventory.GetSelectedItemStack();
-                if (!tool.IsEmpty() && tool.item.itemType == ItemType.Tool)
+                ItemStack toolStack = playerInventory.GetSelectedItemStack();
+                if (!toolStack.IsEmpty() && toolStack.item.itemType == ItemType.Tool)
                 {
-                    // Simple speed boost for tools
-                    speedMultiplier = 2.0f; 
+                    speedMultiplier = GetToolSpeedMultiplier(hitBlock, toolStack.item);
                 }
             }
 
-            currentBreakProgress += (Time.deltaTime / defaultBreakTime) * speedMultiplier;
+            float hardness = BlockData.GetBlockHardness(hitBlock);
+            if (float.IsPositiveInfinity(hardness))
+            {
+                // Unbreakable, just reset
+                ResetBreaking();
+                return;
+            }
+
+            float requiredTime = defaultBreakTime * Mathf.Max(0.01f, hardness);
+            currentBreakProgress += (Time.deltaTime / requiredTime) * speedMultiplier;
             
             if (currentBreakProgress >= 1.0f)
             {
@@ -190,6 +254,51 @@ public class BlockInteraction : MonoBehaviour
         {
             ResetBreaking();
         }
+    }
+
+    float GetToolSpeedMultiplier(BlockType block, Item tool)
+    {
+        if (tool == null || tool.itemType != ItemType.Tool) return 1.0f;
+
+        float multiplier = 1.0f;
+        bool isEffective = false;
+
+        switch (block)
+        {
+            case BlockType.Stone:
+            case BlockType.IronOre:
+            case BlockType.DiamondBlock:
+                if (tool.toolType == ToolType.Pickaxe) isEffective = true;
+                break;
+            case BlockType.Dirt:
+            case BlockType.Grass:
+            case BlockType.Sand:
+                if (tool.toolType == ToolType.Shovel) isEffective = true;
+                break;
+            case BlockType.Wood:
+            case BlockType.Planks:
+            case BlockType.CraftingTable:
+                if (tool.toolType == ToolType.Axe) isEffective = true;
+                break;
+            case BlockType.Leaves:
+                // Swords break leaves faster
+                if (tool.toolType == ToolType.Sword) isEffective = true;
+                break;
+        }
+
+        if (isEffective)
+        {
+            switch (tool.toolTier)
+            {
+                case ToolTier.Wood: multiplier = 2.0f; break;
+                case ToolTier.Stone: multiplier = 4.0f; break;
+                case ToolTier.Iron: multiplier = 6.0f; break;
+                case ToolTier.Diamond: multiplier = 8.0f; break;
+                case ToolTier.Gold: multiplier = 12.0f; break;
+            }
+        }
+        
+        return multiplier;
     }
 
     void ResetBreaking()
@@ -249,13 +358,31 @@ public class BlockInteraction : MonoBehaviour
         // Get block type before breaking
         BlockType blockType = chunkComp.GetBlockLocal(lx, ly, lz);
 
+        // Prevent breaking unbreakable blocks like bedrock
+        if (!BlockData.IsBreakable(blockType))
+        {
+            Debug.Log("Cannot break that block (unbreakable)");
+            return;
+        }
+
         // Perform break: set to Air
         WorldGenerator.Instance.SetBlockAtGlobal(globalX, ly, globalZ, BlockType.Air);
+        if (breakSound != null) audioSource.PlayOneShot(breakSound);
 
         // Drop item in world
         if (ItemDatabase.Instance != null)
         {
-            Item itemToDrop = ItemDatabase.Instance.GetItemForBlock(blockType);
+            Item itemToDrop = null;
+            // Special-case: breaking IronOre yields an Iron Ingot directly
+            if (blockType == BlockType.IronOre)
+            {
+                itemToDrop = ItemDatabase.Instance.GetItem("iron_ingot");
+            }
+            else
+            {
+                itemToDrop = ItemDatabase.Instance.GetItemForBlock(blockType);
+            }
+
             if (itemToDrop != null)
             {
                 // Spawn at exact block center
@@ -282,8 +409,50 @@ public class BlockInteraction : MonoBehaviour
 
     void HandleRightClick()
     {
-        if (Physics.Raycast(playerCamera.transform.position, playerCamera.transform.forward, out RaycastHit hit, reach,
-                chunkLayer))
+        // 1. Check for block interaction (Crafting Table, etc.)
+        if (Physics.Raycast(playerCamera.transform.position, playerCamera.transform.forward, out RaycastHit hit, reach, chunkLayer))
+        {
+            Transform chunkT = hit.collider.transform;
+            Chunk chunkComp = chunkT.GetComponent<Chunk>();
+            if (chunkComp != null)
+            {
+                Vector3 localHit = chunkT.InverseTransformPoint(hit.point);
+                Vector3 localNormal = chunkT.InverseTransformDirection(hit.normal);
+                Vector3 localInside = localHit - localNormal * 0.01f;
+                int bx = Mathf.FloorToInt(localInside.x);
+                int by = Mathf.FloorToInt(localInside.y);
+                int bz = Mathf.FloorToInt(localInside.z);
+
+                BlockType hitBlock = chunkComp.GetBlockLocal(bx, by, bz);
+                if (hitBlock == BlockType.CraftingTable)
+                {
+                    if (inventoryUI != null)
+                    {
+                        inventoryUI.OpenCraftingTable();
+                        return; // Interaction consumed the click
+                    }
+                }
+            }
+        }
+
+        // 2. Check for Item Usage (Eating)
+        if (playerInventory != null)
+        {
+            ItemStack selectedStack = playerInventory.GetSelectedItemStack();
+            if (!selectedStack.IsEmpty() && selectedStack.item.isConsumable)
+            {
+                PlayerController pc = GetComponentInParent<PlayerController>();
+                if (pc != null)
+                {
+                    pc.Eat(selectedStack.item.hungerAmount, selectedStack.item.healAmount);
+                    playerInventory.ConsumeSelectedItem(1);
+                    return; // Consumed click
+                }
+            }
+        }
+
+        // 3. Place Block (if raycast hit)
+        if (Physics.Raycast(playerCamera.transform.position, playerCamera.transform.forward, out hit, reach, chunkLayer))
         {
             Transform chunkT = hit.collider.transform;
             Chunk chunkComp = chunkT.GetComponent<Chunk>();
@@ -291,22 +460,6 @@ public class BlockInteraction : MonoBehaviour
 
             Vector3 localHit = chunkT.InverseTransformPoint(hit.point);
             Vector3 localNormal = chunkT.InverseTransformDirection(hit.normal);
-
-            // Check for interaction (block we hit)
-            Vector3 localInside = localHit - localNormal * 0.01f;
-            int bx = Mathf.FloorToInt(localInside.x);
-            int by = Mathf.FloorToInt(localInside.y);
-            int bz = Mathf.FloorToInt(localInside.z);
-
-            BlockType hitBlock = chunkComp.GetBlockLocal(bx, by, bz);
-            if (hitBlock == BlockType.CraftingTable)
-            {
-                if (inventoryUI != null)
-                {
-                    inventoryUI.OpenCraftingTable();
-                    return; // Interaction consumed the click
-                }
-            }
 
             // Proceed to placement logic
             TryPlace(hit, chunkT, chunkComp, localHit, localNormal);
@@ -362,6 +515,7 @@ public class BlockInteraction : MonoBehaviour
 
         // Place the block
         WorldGenerator.Instance.SetBlockAtGlobal(globalX, ly, globalZ, blockToPlace);
+        if (placeSound != null) audioSource.PlayOneShot(placeSound);
 
         // Remove one item from inventory
         playerInventory.RemoveItem(selectedStack.item.itemName, 1);

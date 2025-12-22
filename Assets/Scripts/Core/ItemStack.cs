@@ -14,7 +14,8 @@ public class ItemStack
     public ItemStack(Item item, int count = 1)
     {
         this.item = item?.Clone();
-        this.count = Mathf.Max(1, count);
+        // Only force count to 1 if we actually have an item
+        this.count = (this.item != null) ? Mathf.Max(1, count) : 0;
         this.currentDurability = item?.maxDurability ?? 0;
     }
 

@@ -125,8 +125,14 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c24ae4f24f4696247890ac79878937d3, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Chunk
+  bedrockLayerCount: 4
+  ironVeinAttempts: 25
+  ironVeinSizeMin: 4
+  ironVeinSizeMax: 10
+  ironMaxHeight: 64
   blockTextures: []
-  debugLogCounts: 1
+  debugLogCounts: 0
+  ambientLightLevel: 2
   debugLogUVs: 0
   debugSampleX: -1
   debugSampleY: -1

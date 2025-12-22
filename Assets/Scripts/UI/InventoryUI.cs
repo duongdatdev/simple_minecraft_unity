@@ -19,6 +19,7 @@ public class InventoryUI : MonoBehaviour
     [Header("Hotbar Settings")]
     public Transform hotbarSlotsParent;
     public Transform internalHotbarSlotsParent; // New: For hotbar inside inventory panel
+    public GameObject internalInventoryPanel; // Panel that groups internal hotbar + main inventory UI
     public KeyCode toggleInventoryKey = KeyCode.E;
 
     [Header("Main Inventory Settings")]
@@ -66,7 +67,14 @@ public class InventoryUI : MonoBehaviour
     {
         if (playerInventory == null)
         {
-            playerInventory = FindObjectOfType<Inventory>();
+            playerInventory = Object.FindAnyObjectByType<Inventory>();
+        }
+
+        // Ensure cursor item doesn't block clicks and is on top
+        if (cursorItemImage != null)
+        {
+            cursorItemImage.raycastTarget = false;
+            cursorItemImage.transform.SetAsLastSibling();
         }
 
         // Ensure HUD hotbar panel is visible so HUD hotbar doesn't disappear
@@ -179,18 +187,35 @@ public class InventoryUI : MonoBehaviour
             }
         }
 
+        // If no explicit parent was assigned for the internal hotbar slots, try to use/create one under internalInventoryPanel
+        if (internalHotbarSlotsParent == null && internalInventoryPanel != null)
+        {
+            Transform existing = internalInventoryPanel.transform.Find("InternalHotbarSlots");
+            if (existing != null)
+            {
+                internalHotbarSlotsParent = existing;
+            }
+            else
+            {
+                GameObject go = new GameObject("InternalHotbarSlots", typeof(RectTransform));
+                go.transform.SetParent(internalInventoryPanel.transform, false);
+                internalHotbarSlotsParent = go.transform;
+            }
+        }
+
         // Create Internal Hotbar Slots (inside Inventory Panel)
         // Avoid creating duplicate slots if both parents point to the same transform
         if (internalHotbarSlotsParent != null && internalHotbarSlotsParent != hotbarSlotsParent)
         {
             for (int i = 0; i < Inventory.HOTBAR_SIZE; i++)
-            {
+            { 
                 GameObject slotObj = Instantiate(inventorySlotPrefab, internalHotbarSlotsParent);
                 InventorySlotUI slotUI = slotObj.GetComponent<InventorySlotUI>();
                 
                 if (slotUI != null)
                 {
                     slotUI.Initialize(i, InventorySlotUI.SlotType.Inventory);
+                    slotUI.enableSelectionHighlight = true; // Enable selection highlight for internal hotbar
                     slotUI.OnSlotClicked += HandleSlotClick;
                     internalHotbarSlots.Add(slotUI);
                 }
@@ -338,6 +363,8 @@ public class InventoryUI : MonoBehaviour
                 clickedStack = playerInventory.shieldSlot;
                 break;
         }
+
+
 
         if (button == PointerEventData.InputButton.Left)
         {
@@ -493,8 +520,10 @@ public class InventoryUI : MonoBehaviour
         {
             if (!cursorStack.IsEmpty())
             {
+                cursorItemImage.gameObject.SetActive(true); // Ensure GameObject is active
                 cursorItemImage.enabled = true;
                 cursorItemImage.sprite = cursorStack.item.icon;
+                cursorItemImage.transform.SetAsLastSibling(); // Ensure on top
                 if (cursorItemCount != null)
                 {
                     cursorItemCount.text = cursorStack.count > 1 ? cursorStack.count.ToString() : "";
@@ -503,6 +532,7 @@ public class InventoryUI : MonoBehaviour
             else
             {
                 cursorItemImage.enabled = false;
+                cursorItemImage.gameObject.SetActive(false); // Hide GameObject
                 if (cursorItemCount != null) cursorItemCount.text = "";
             }
         }
@@ -573,7 +603,7 @@ public class InventoryUI : MonoBehaviour
         // Update selection highlights Internal
         for (int i = 0; i < internalHotbarSlots.Count; i++)
         {
-            internalHotbarSlots[i].SetSelected(i == selectedSlot);
+            internalHotbarSlots[i].SetSelected(true);
         }
     }
 
@@ -671,6 +701,7 @@ public class InventoryUI : MonoBehaviour
         if (mainInventoryPanel != null) mainInventoryPanel.SetActive(true);
         if (inventoryCraftingPanel != null) inventoryCraftingPanel.SetActive(true);
         if (craftingTablePanel != null) craftingTablePanel.SetActive(false);
+        if (internalInventoryPanel != null) internalInventoryPanel.SetActive(true);
 
         if (playerInventory != null) playerInventory.SetCraftingGridSize(2);
 
@@ -692,6 +723,7 @@ public class InventoryUI : MonoBehaviour
         if (mainInventoryPanel != null) mainInventoryPanel.SetActive(false);
         if (inventoryCraftingPanel != null) inventoryCraftingPanel.SetActive(false);
         if (craftingTablePanel != null) craftingTablePanel.SetActive(false);
+        if (internalInventoryPanel != null) internalInventoryPanel.SetActive(false);
 
         // Lock cursor when inventory is closed
         Cursor.lockState = CursorLockMode.Locked;
@@ -727,6 +759,7 @@ public class InventoryUI : MonoBehaviour
         if (mainInventoryPanel != null) mainInventoryPanel.SetActive(true);
         if (inventoryCraftingPanel != null) inventoryCraftingPanel.SetActive(false);
         if (craftingTablePanel != null) craftingTablePanel.SetActive(true);
+        if (internalInventoryPanel != null) internalInventoryPanel.SetActive(true);
 
         if (playerInventory != null) playerInventory.SetCraftingGridSize(3);
 

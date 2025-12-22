@@ -159,9 +159,7 @@ public class BlockHighlighterLines : MonoBehaviour
             // Chỉ cập nhật khi block khác hoặc chunk khác
             if (!hasTarget || newBlock != currentLocalBlock || targetChunkTransform != chunkT)
             {
-                if (debugMode)
-                    Debug.Log(
-                        $"[Outline] TargetBlock changed: old={currentLocalBlock} new={newBlock} chunk={chunkT.name} frame={frameCounter}");
+                if (debugMode) { Debug.Log($"[Outline] TargetBlock changed: old={currentLocalBlock} new={newBlock} chunk={chunkT.name} frame={frameCounter}"); lastLoggedFrameChange = frameCounter; }
 
                 currentLocalBlock = newBlock;
                 targetChunkTransform = chunkT;
@@ -170,8 +168,7 @@ public class BlockHighlighterLines : MonoBehaviour
         }
         else
         {
-            if (hasTarget && debugMode)
-                Debug.Log($"[Outline] Lost target at frame {frameCounter}");
+            if (hasTarget && debugMode) { Debug.Log($"[Outline] Lost target at frame {frameCounter}"); lastLoggedFrameChange = frameCounter; }
 
             hasTarget = false;
             targetChunkTransform = null;

@@ -27,6 +27,10 @@ public class Item
     public int healAmount = 0;
     public int hungerAmount = 0;
 
+    // For armor items
+    public ArmorType armorType = ArmorType.None;
+    public int armorPoints = 0;
+
     public Item(string name, string display, ItemType type)
     {
         itemName = name;
@@ -47,7 +51,9 @@ public class Item
             maxDurability = this.maxDurability,
             isConsumable = this.isConsumable,
             healAmount = this.healAmount,
-            hungerAmount = this.hungerAmount
+            hungerAmount = this.hungerAmount,
+            armorType = this.armorType,
+            armorPoints = this.armorPoints
         };
     }
 }
@@ -62,7 +68,20 @@ public enum ItemType
     Weapon,     // Sword, Bow
     Food,       // Consumable items
     Material,   // Crafting materials (sticks, coal, etc)
+    Armor,      // Armor items
     Misc        // Other items
+}
+
+/// <summary>
+/// Armor types
+/// </summary>
+public enum ArmorType
+{
+    None,
+    Helmet,
+    Chestplate,
+    Leggings,
+    Boots
 }
 
 /// <summary>

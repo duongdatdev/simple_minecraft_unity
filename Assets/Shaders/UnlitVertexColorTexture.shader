@@ -13,15 +13,20 @@ Shader "Custom/UnlitVertexColorTexture"
             #include "UnityCG.cginc"
 
             sampler2D _MainTex;
+            float _SunIntensity;
+            float _AmbientFloor;
+
             struct appdata {
                 float4 vertex : POSITION;
                 float2 uv : TEXCOORD0;
+                float2 uv2 : TEXCOORD1;
                 fixed4 color : COLOR;
             };
             struct v2f {
                 float2 uv : TEXCOORD0;
                 fixed4 col : COLOR;
                 float4 pos : SV_POSITION;
+                float2 light : TEXCOORD1;
             };
             v2f vert(appdata v)
             {
@@ -29,6 +34,7 @@ Shader "Custom/UnlitVertexColorTexture"
                 o.pos = UnityObjectToClipPos(v.vertex);
                 o.uv = v.uv;
                 o.col = v.color;
+                o.light = v.uv2;
                 return o;
             }
             fixed4 frag(v2f i) : SV_Target
@@ -37,9 +43,21 @@ Shader "Custom/UnlitVertexColorTexture"
                 
                 // Decode Vertex Color:
                 // RGB = Biome Tint Color (White if untinted)
-                // A   = Light Level (0..1)
                 float3 biomeColor = i.col.rgb;
-                float light = i.col.a;
+                
+                float skyLight = i.light.x;
+                float blockLight = i.light.y;
+                
+                // Combine lights
+                // Sky light is affected by sun intensity
+                // Ensure _SunIntensity is at least a small value to avoid pitch black if not set
+                float sun = max(_SunIntensity, 0.1); 
+                float dynamicSkyLight = skyLight * sun;
+
+                // Ensure a global ambient floor (set from DayNightCycle)
+                float ambientFloor = _AmbientFloor; // expected 0..1
+
+                float light = max(max(dynamicSkyLight, blockLight), ambientFloor);
 
                 // Analyze pixel for masking (Side Grass)
                 // 1. Grey check (Top face / Overlay): Low saturation
@@ -59,9 +77,6 @@ Shader "Custom/UnlitVertexColorTexture"
                 
                 // Tinted (Grass/Leaves): Texture * Biome * Light
                 float3 tinted = tex.rgb * biomeColor * light;
-                
-                // If biomeColor is White (Wood), tinted == untinted, so mask doesn't matter.
-                // If biomeColor is Green (Grass), mask selects between Dirt (Untinted) and Grass (Tinted).
                 
                 float3 finalRGB = lerp(untinted, tinted, mask);
                 

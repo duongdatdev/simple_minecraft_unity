@@ -62,5 +62,17 @@ public class DayNightCycle : MonoBehaviour
         // Update Ambient Light
         bool isDay = timeOfDay > 0.25f && timeOfDay < 0.75f;
         RenderSettings.ambientLight = Color.Lerp(RenderSettings.ambientLight, isDay ? dayAmbient : nightAmbient, Time.deltaTime * 0.5f);
+
+        // Set global sun intensity for shader
+        float intensity = 0.1f; // Night minimum
+        if (sun != null && sun.enabled)
+        {
+            intensity = sun.intensity;
+        }
+        Shader.SetGlobalFloat("_SunIntensity", intensity);
+
+        // Also set a small ambient floor so caves/overhangs are never pitch-black
+        // Use a conservative default (~2 / 15 = 0.133). This keeps shadowed areas dim but visible.
+        Shader.SetGlobalFloat("_AmbientFloor", 0.13f);
     }
 }

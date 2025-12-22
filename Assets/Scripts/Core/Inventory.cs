@@ -107,6 +107,88 @@ public class Inventory : MonoBehaviour
         tableRecipe.result = ItemDatabase.Instance.GetItem("crafting_table");
         tableRecipe.resultCount = 1;
         recipes.Add(tableRecipe);
+
+        AddToolRecipes();
+    }
+
+    private void AddToolRecipes()
+    {
+        Item planks = ItemDatabase.Instance.GetItem("planks");
+        Item stick = ItemDatabase.Instance.GetItem("stick");
+        Item cobble = ItemDatabase.Instance.GetItem("stone"); // Using stone as cobblestone
+        Item iron = ItemDatabase.Instance.GetItem("iron_ingot");
+        Item diamond = ItemDatabase.Instance.GetItem("diamond");
+
+        // Stick (2x2)
+        CreateRecipe2x2(new Item[] { planks, null, planks, null }, stick, 4);
+
+        // --- PICKAXES ---
+        // Wooden Pickaxe
+        CreateRecipe3x3(new Item[] { 
+            planks, planks, planks, 
+            null, stick, null, 
+            null, stick, null 
+        }, ItemDatabase.Instance.GetItem("wooden_pickaxe"), 1);
+
+        // Stone Pickaxe
+        CreateRecipe3x3(new Item[] { 
+            cobble, cobble, cobble, 
+            null, stick, null, 
+            null, stick, null 
+        }, ItemDatabase.Instance.GetItem("stone_pickaxe"), 1);
+
+        // Iron Pickaxe
+        CreateRecipe3x3(new Item[] { 
+            iron, iron, iron, 
+            null, stick, null, 
+            null, stick, null 
+        }, ItemDatabase.Instance.GetItem("iron_pickaxe"), 1);
+
+        // Diamond Pickaxe
+        CreateRecipe3x3(new Item[] { 
+            diamond, diamond, diamond, 
+            null, stick, null, 
+            null, stick, null 
+        }, ItemDatabase.Instance.GetItem("diamond_pickaxe"), 1);
+
+        // --- SWORDS ---
+        CreateRecipe3x3(new Item[] { null, planks, null, null, planks, null, null, stick, null }, ItemDatabase.Instance.GetItem("wooden_sword"), 1);
+        CreateRecipe3x3(new Item[] { null, cobble, null, null, cobble, null, null, stick, null }, ItemDatabase.Instance.GetItem("stone_sword"), 1);
+        CreateRecipe3x3(new Item[] { null, iron, null, null, iron, null, null, stick, null }, ItemDatabase.Instance.GetItem("iron_sword"), 1);
+        CreateRecipe3x3(new Item[] { null, diamond, null, null, diamond, null, null, stick, null }, ItemDatabase.Instance.GetItem("diamond_sword"), 1);
+        
+        // --- AXES ---
+        // Wood Axe (Pattern: MM, MS, S) - Simplified to corner
+        CreateRecipe3x3(new Item[] { planks, planks, null, planks, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("wooden_axe"), 1);
+        CreateRecipe3x3(new Item[] { cobble, cobble, null, cobble, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("stone_axe"), 1);
+        CreateRecipe3x3(new Item[] { iron, iron, null, iron, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("iron_axe"), 1);
+        CreateRecipe3x3(new Item[] { diamond, diamond, null, diamond, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("diamond_axe"), 1);
+
+        // --- SHOVELS ---
+        CreateRecipe3x3(new Item[] { null, planks, null, null, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("wooden_shovel"), 1);
+        CreateRecipe3x3(new Item[] { null, cobble, null, null, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("stone_shovel"), 1);
+        CreateRecipe3x3(new Item[] { null, iron, null, null, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("iron_shovel"), 1);
+        CreateRecipe3x3(new Item[] { null, diamond, null, null, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("diamond_shovel"), 1);
+    }
+
+    private void CreateRecipe2x2(Item[] ingredients, Item result, int count)
+    {
+        var r = ScriptableObject.CreateInstance<CraftingRecipe>();
+        r.gridSize = 2;
+        r.ingredients = ingredients;
+        r.result = result;
+        r.resultCount = count;
+        recipes.Add(r);
+    }
+
+    private void CreateRecipe3x3(Item[] ingredients, Item result, int count)
+    {
+        var r = ScriptableObject.CreateInstance<CraftingRecipe>();
+        r.gridSize = 3;
+        r.ingredients = ingredients;
+        r.result = result;
+        r.resultCount = count;
+        recipes.Add(r);
     }
 
     private void Update()
@@ -323,17 +405,37 @@ public class Inventory : MonoBehaviour
         // Handle consumable items (food)
         if (item.isConsumable)
         {
-            // TODO: Apply heal/hunger effects
+            // Apply heal/hunger effects to player if available
+            PlayerController pc = GetComponentInParent<PlayerController>();
+            if (pc != null)
+            {
+                pc.Eat(item.hungerAmount, item.healAmount);
+            }
+
             selectedStack.RemoveCount(1);
             OnSlotChanged?.Invoke(selectedHotbarSlot, selectedStack);
+            return; // consumed
         }
         
         // Tool/weapon durability is handled by the tool usage code
     }
 
     /// <summary>
-    /// Reduce durability of selected tool
+    /// Consume items from selected hotbar slot
     /// </summary>
+    public bool ConsumeSelectedItem(int count = 1)
+    {
+        ItemStack selectedStack = GetSelectedItemStack();
+        if (selectedStack.IsEmpty() || count <= 0) return false;
+        int removed = Mathf.Min(count, selectedStack.count);
+        selectedStack.RemoveCount(removed);
+        OnSlotChanged?.Invoke(selectedHotbarSlot, selectedStack);
+        return removed > 0;
+    }
+
+    /// <summary>
+    /// Reduce durability of selected tool
+    /// </summary>"},{ 
     public bool DamageSelectedTool(int damage = 1)
     {
         ItemStack selectedStack = GetSelectedItemStack();
@@ -467,5 +569,111 @@ public class Inventory : MonoBehaviour
     {
         shieldSlot = stack ?? new ItemStack(null, 0);
         OnShieldSlotChanged?.Invoke(shieldSlot);
+    }
+
+    public ItemStack GetItem(int index)
+    {
+        if (index < 0 || index >= TOTAL_SIZE) return null;
+        return slots[index];
+    }
+
+    public InventoryData GetInventoryData()
+    {
+        InventoryData data = new InventoryData();
+        
+        // Main slots
+        for (int i = 0; i < TOTAL_SIZE; i++)
+        {
+            if (!slots[i].IsEmpty())
+            {
+                InventoryItemData itemData = new InventoryItemData();
+                itemData.slotIndex = i;
+                itemData.itemName = slots[i].item.itemName;
+                itemData.count = slots[i].count;
+                itemData.durability = slots[i].currentDurability;
+                data.items.Add(itemData);
+            }
+        }
+
+        // Armor
+        for (int i = 0; i < armorSlots.Length; i++)
+        {
+            if (!armorSlots[i].IsEmpty())
+            {
+                InventoryItemData itemData = new InventoryItemData();
+                itemData.slotIndex = i;
+                itemData.itemName = armorSlots[i].item.itemName;
+                itemData.count = armorSlots[i].count;
+                itemData.durability = armorSlots[i].currentDurability;
+                data.armorItems.Add(itemData);
+            }
+        }
+
+        // Shield
+        if (!shieldSlot.IsEmpty())
+        {
+            InventoryItemData itemData = new InventoryItemData();
+            itemData.itemName = shieldSlot.item.itemName;
+            itemData.count = shieldSlot.count;
+            itemData.durability = shieldSlot.currentDurability;
+            data.shieldItem = itemData;
+        }
+
+        return data;
+    }
+
+    public void LoadInventoryData(InventoryData data)
+    {
+        // Clear existing
+        for (int i = 0; i < TOTAL_SIZE; i++) slots[i] = new ItemStack(null, 0);
+        for (int i = 0; i < armorSlots.Length; i++) armorSlots[i] = new ItemStack(null, 0);
+        shieldSlot = new ItemStack(null, 0);
+
+        if (data == null) return;
+
+        // Load items
+        foreach (var itemData in data.items)
+        {
+            if (itemData.slotIndex >= 0 && itemData.slotIndex < TOTAL_SIZE)
+            {
+                Item item = ItemDatabase.Instance.GetItem(itemData.itemName);
+                if (item != null)
+                {
+                    ItemStack stack = new ItemStack(item, itemData.count);
+                    stack.currentDurability = itemData.durability;
+                    slots[itemData.slotIndex] = stack;
+                    OnSlotChanged?.Invoke(itemData.slotIndex, stack);
+                }
+            }
+        }
+
+        // Load armor
+        foreach (var itemData in data.armorItems)
+        {
+            if (itemData.slotIndex >= 0 && itemData.slotIndex < armorSlots.Length)
+            {
+                Item item = ItemDatabase.Instance.GetItem(itemData.itemName);
+                if (item != null)
+                {
+                    ItemStack stack = new ItemStack(item, itemData.count);
+                    stack.currentDurability = itemData.durability;
+                    armorSlots[itemData.slotIndex] = stack;
+                    OnArmorSlotChanged?.Invoke(itemData.slotIndex, stack);
+                }
+            }
+        }
+
+        // Load shield
+        if (data.shieldItem != null && !string.IsNullOrEmpty(data.shieldItem.itemName))
+        {
+            Item item = ItemDatabase.Instance.GetItem(data.shieldItem.itemName);
+            if (item != null)
+            {
+                ItemStack stack = new ItemStack(item, data.shieldItem.count);
+                stack.currentDurability = data.shieldItem.durability;
+                shieldSlot = stack;
+                OnShieldSlotChanged?.Invoke(stack);
+            }
+        }
     }
 }

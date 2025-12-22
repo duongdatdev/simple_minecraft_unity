@@ -27,6 +27,7 @@ public class Chunk : MonoBehaviour
     private List<int> triangles = new List<int>();
     private List<Vector2> uvs = new List<Vector2>();
     private List<Color> colors = new List<Color>();
+    private List<Vector2> uv2s = new List<Vector2>();
 
     // lighting arrays (per chunk)
     private byte[,,] skyLight;
@@ -58,6 +59,21 @@ public class Chunk : MonoBehaviour
 
     private int chunkX;
     private int chunkZ;
+
+    [Header("Bedrock")]
+    [Tooltip("Number of solid bedrock layers at the bottom of the world (0 = none)")]
+    public int bedrockLayerCount = 4; // like Minecraft bottom layers
+
+    // Ore generation settings
+    [Header("Ore Generation")]
+    [Tooltip("Number of vein generation attempts per chunk for Iron Ore")] public int ironVeinAttempts = 25;
+    [Tooltip("Min blocks per vein (inclusive)")] public int ironVeinSizeMin = 4;
+    [Tooltip("Max blocks per vein (inclusive)")] public int ironVeinSizeMax = 10;
+    [Tooltip("Maximum world height where iron can spawn")]
+    public int ironMaxHeight = 64;
+
+    // store seed used for deterministic chunk generation
+    private int generatorSeed = 0;
 
     [Header("Block Texture Data (assign assets)")]
     public BlockTextureData[] blockTextures; // assign ScriptableObjects in inspector
@@ -149,7 +165,7 @@ public class Chunk : MonoBehaviour
         float heightNoiseScale, int heightNoiseOctaves, float heightNoisePersistence, float heightNoiseLacunarity,
         float heightAmplitude, Vector2 heightOffset,
         bool enableCaves, float caveThreshold, float caveScale, int caveOctaves, Vector3 caveOffset,
-        int seed, bool buildMesh = true)
+        int seed, bool buildMesh = true, int[] savedBlockData = null)
     {
         this.chunkX = chunkX;
         this.chunkZ = chunkZ;
@@ -166,8 +182,16 @@ public class Chunk : MonoBehaviour
         this.caveScale = caveScale;
         this.caveOctaves = caveOctaves;
         this.caveOffset = caveOffset;
+        this.generatorSeed = seed; // remember seed for deterministic ore veins
 
-        GenerateBlocksFromNoise();
+        if (savedBlockData != null)
+        {
+            SetBlockData(savedBlockData);
+        }
+        else
+        {
+            GenerateBlocksFromNoise();
+        }
 
         // PopulateOakTrees(seed, attempts: 12, chance: 0.18f, minTrunk: 4, maxTrunk: 6, leafRadius: 2);
         ComputeInitialSkylight();
@@ -181,6 +205,10 @@ public class Chunk : MonoBehaviour
 
     private void GenerateBlocksFromNoise()
     {
+        int totalPotentialOreCount = 0; // counts ore placements BEFORE caves
+        float maxOreNoise = -999f;
+        const float oreThreshold = 0.45f;
+
         for (int lx = 0; lx < BlockData.ChunkWidth; lx++)
         {
             for (int lz = 0; lz < BlockData.ChunkWidth; lz++)
@@ -196,15 +224,31 @@ public class Chunk : MonoBehaviour
 
                 for (int y = 0; y < BlockData.ChunkHeight; y++)
                 {
-                    if (y < columnHeight && y > columnHeight - 4) blocks[lx, y, lz] = BlockType.Dirt;
+                    // Bedrock layer at bottom (unbreakable)
+                    if (y < bedrockLayerCount)
+                    {
+                        blocks[lx, y, lz] = BlockType.Bedrock;
+                    }
+                    else if (y < columnHeight && y > columnHeight - 4) blocks[lx, y, lz] = BlockType.Dirt;
                     else if (y <= columnHeight - 4)
                     {
-                        // Simple Iron Ore generation
-                        // Use 3D noise for veins
-                        float oreNoise = Noise.PerlinNoise3D(globalX, y, globalZ, 2, 0.5f, 2f, 8f, new Vector3(100, 100, 100));
-                        if (oreNoise > 0.5f)
+                        // Iron Ore generation (Minecraft-like)
+                        // Spawns below configurable height (use <64 by default)
+                        // Uses 3D noise for veins. Tune octave/scale/threshold for visible veins.
+                        if (y < 64)
                         {
-                            blocks[lx, y, lz] = BlockType.IronOre;
+                            // More permissive defaults: octaves=3, scale=12f, threshold=oreThreshold
+                            float oreNoise = Noise.PerlinNoise3D(globalX, y, globalZ, 3, 0.5f, 2f, 12f, new Vector3(100, 100, 100));
+                            if (oreNoise > maxOreNoise) maxOreNoise = oreNoise;
+                            if (oreNoise > oreThreshold)
+                            {
+                                blocks[lx, y, lz] = BlockType.IronOre;
+                                totalPotentialOreCount++;
+                            }
+                            else
+                            {
+                                blocks[lx, y, lz] = BlockType.Stone;
+                            }
                         }
                         else
                         {
@@ -237,6 +281,67 @@ public class Chunk : MonoBehaviour
                         }
                     }
                 }
+            }
+        }
+
+        // Generate veins (random-walk) after caves so veins are placed into remaining stone
+        // Use deterministic PRNG from chunk seed so veins are stable
+        if (ironVeinAttempts > 0)
+        {
+            System.Random pr = new System.Random(generatorSeed ^ (chunkX * 734287) ^ (chunkZ * 912783));
+            for (int attempt = 0; attempt < ironVeinAttempts; attempt++)
+            {
+                int sx = pr.Next(0, BlockData.ChunkWidth);
+                int sy = pr.Next(1, Mathf.Min(ironMaxHeight, BlockData.ChunkHeight - 1));
+                int sz = pr.Next(0, BlockData.ChunkWidth);
+                int veinSize = pr.Next(ironVeinSizeMin, ironVeinSizeMax + 1);
+
+                for (int i = 0; i < veinSize; i++)
+                {
+                    // Place only inside stone blocks
+                    if (blocks[sx, sy, sz] == BlockType.Stone)
+                    {
+                        blocks[sx, sy, sz] = BlockType.IronOre;
+                    }
+
+                    // random walk step
+                    sx += pr.Next(-1, 2);
+                    sy += pr.Next(-1, 2);
+                    sz += pr.Next(-1, 2);
+
+                    // clamp to chunk bounds
+                    sx = Mathf.Clamp(sx, 0, BlockData.ChunkWidth - 1);
+                    sy = Mathf.Clamp(sy, 0, BlockData.ChunkHeight - 1);
+                    sz = Mathf.Clamp(sz, 0, BlockData.ChunkWidth - 1);
+                }
+            }
+        }
+
+        // Optional debug: count iron ore in this chunk if debug logging is enabled
+        if (debugLogCounts)
+        {
+            int ironCount = 0;
+            for (int x = 0; x < BlockData.ChunkWidth; x++)
+            {
+                for (int y = 0; y < BlockData.ChunkHeight; y++)
+                {
+                    for (int z = 0; z < BlockData.ChunkWidth; z++)
+                    {
+                        if (blocks[x, y, z] == BlockType.IronOre) ironCount++;
+                    }
+                }
+            }
+            Debug.Log($"[Chunk:{chunkX},{chunkZ}] IronOre count (after caves+veins) = {ironCount}");
+            Debug.Log($"[Chunk:{chunkX},{chunkZ}] Potential Ore placements (before caves) = {totalPotentialOreCount}, maxOreNoise = {maxOreNoise:F3}");
+
+            if (ironCount > 0 && FindTextureData(BlockType.IronOre) == null)
+            {
+                Debug.LogWarning($"[Chunk:{chunkX},{chunkZ}] IronOre found but no BlockTextureData assigned. Add an IronOre BlockTextureData in Resources/BlockTextures so iron looks distinct.");
+            }
+
+            if (totalPotentialOreCount == 0)
+            {
+                Debug.LogWarning($"[Chunk:{chunkX},{chunkZ}] No ore candidates found (maxNoise={maxOreNoise:F3}). Consider lowering oreThreshold or adjusting noise parameters.");
             }
         }
     }
@@ -277,6 +382,7 @@ public class Chunk : MonoBehaviour
 
         int vertCount = vertices.Count;
         Color32[] colors = new Color32[vertCount];
+        uv2s.Clear();
 
         for (int i = 0; i < vertCount; i++)
         {
@@ -289,7 +395,8 @@ public class Chunk : MonoBehaviour
             // A vertex corner touches exactly 4 blocks in a 2x2x2 configuration
             // We need to sample based on which corner of the block this vertex represents
 
-            int lightSum = 0;
+            int skySum = 0;
+            int blockSum = 0;
             int sampleCount = 0;
             int aoCount = 0; // count of opaque blocks for ambient occlusion
 
@@ -338,9 +445,8 @@ public class Chunk : MonoBehaviour
                             }
                         }
 
-                        // Take maximum of sky and block light
-                        int maxLight = Math.Max(skyL, blockL);
-                        lightSum += maxLight;
+                        skySum += skyL;
+                        blockSum += blockL;
                         sampleCount++;
 
                         // Count opaque blocks for ambient occlusion
@@ -350,20 +456,25 @@ public class Chunk : MonoBehaviour
             }
 
             // Average light value
-            float avgLight = sampleCount > 0 ? (float)lightSum / sampleCount : 0f;
+            float avgSky = sampleCount > 0 ? (float)skySum / sampleCount : 0f;
+            float avgBlock = sampleCount > 0 ? (float)blockSum / sampleCount : 0f;
 
             // Apply ambient occlusion based on number of opaque neighbors
-            // Minecraft-style AO: each opaque block darkens by 20%
-            float aoFactor = 1.0f - (aoCount / 8.0f) * 0.4f; // 8 samples max, darken up to 40%
+            // Minecraft-style AO: each opaque block darkens by 20% (tuned)
+            float aoFactor = 1.0f - (aoCount / 8.0f) * 0.3f; // 8 samples max, darken up to 30%
 
-            // Combine light and AO
-            float finalLightValue = avgLight * aoFactor;
+            // Compute ambient minimum normalized (0..1)
+            float ambientMinimum = Mathf.Max(ambientLightLevel, 2);
+            float ambientMinimumNorm = ambientMinimum / 15f;
 
-            // Apply ambient minimum
-            if (finalLightValue < ambientLightLevel)
-            {
-                finalLightValue = ambientLightLevel;
-            }
+            // Store in uv2 (normalized values): ensure skylight component never drops below ambient floor
+            float skyNorm = Mathf.Max((avgSky * aoFactor) / 15f, ambientMinimumNorm);
+            float blockNorm = Mathf.Max((avgBlock * aoFactor) / 15f, 0f);
+            uv2s.Add(new Vector2(skyNorm, blockNorm));
+
+            // Combine light and AO for vertex alpha (legacy / debug) - keep consistent with uv2
+            float maxLight = Mathf.Max(avgSky, avgBlock);
+            float finalLightValue = Mathf.Max(maxLight * aoFactor, ambientMinimum);
 
             // Map 0..15 -> 0..255
             float lightNorm = Mathf.Clamp01(finalLightValue / 15f);
@@ -379,6 +490,7 @@ public class Chunk : MonoBehaviour
         }
 
         mesh.colors32 = colors;
+        mesh.SetUVs(1, uv2s);
     }
 
     #region Lighting: skylight + block-light API
@@ -476,16 +588,25 @@ public class Chunk : MonoBehaviour
         WorldLightManager.Instance.RemoveLightSourceGlobal(globalX, y, globalZ);
     }
     
-    // PUBLIC wrapper so external systems can recompute skylight and update mesh/collider
+    // PUBLIC wrapper so external systems can recompute skylight and schedule mesh rebuild
     // Call this after all neighbor chunks have been spawned/registered.
     public void RecomputeSkylightAndUpdateMesh()
     {
-        // call private skylight compute
+        // recompute skylight arrays (fast-ish)
         ComputeInitialSkylight();
 
-        // rebuild mesh and update collider
-        BuildMesh();
-        UpdateCollider();
+        // Instead of performing an immediate mesh build (which causes spikes), schedule the rebuild
+        // via the WorldGenerator rebuild queue so it can be processed in a throttled way.
+        if (WorldGenerator.Instance != null)
+        {
+            WorldGenerator.Instance.EnqueueChunkForRebuild(this);
+        }
+        else
+        {
+            // fallback: do immediate rebuild if no world manager exists
+            BuildMesh();
+            UpdateCollider();
+        }
     }
 
 
@@ -501,6 +622,7 @@ public class Chunk : MonoBehaviour
         triangles.Clear();
         uvs.Clear();
         colors.Clear();
+        uv2s.Clear();
         vertexLightInfos.Clear();
 
         int faceCount = 0;
@@ -726,6 +848,8 @@ public class Chunk : MonoBehaviour
 
     #region Public API for block changes
 
+    public bool isModified = false;
+
     /// <summary>
     /// Safely set a local block inside this chunk (does not handle neighbor chunks).
     /// Call WorldGenerator.SetBlockAtGlobal to ensure neighbors are enqueued.
@@ -736,7 +860,49 @@ public class Chunk : MonoBehaviour
             y < 0 || y >= BlockData.ChunkHeight ||
             lz < 0 || lz >= BlockData.ChunkWidth) return;
 
-        blocks[lx, y, lz] = type;
+        if (blocks[lx, y, lz] != type)
+        {
+            blocks[lx, y, lz] = type;
+            isModified = true;
+        }
+    }
+
+    public int[] GetBlockData()
+    {
+        int width = BlockData.ChunkWidth;
+        int height = BlockData.ChunkHeight;
+        int[] data = new int[width * height * width];
+        int idx = 0;
+        for (int x = 0; x < width; x++)
+        {
+            for (int y = 0; y < height; y++)
+            {
+                for (int z = 0; z < width; z++)
+                {
+                    data[idx++] = (int)blocks[x, y, z];
+                }
+            }
+        }
+        return data;
+    }
+
+    public void SetBlockData(int[] data)
+    {
+        int width = BlockData.ChunkWidth;
+        int height = BlockData.ChunkHeight;
+        int idx = 0;
+        for (int x = 0; x < width; x++)
+        {
+            for (int y = 0; y < height; y++)
+            {
+                for (int z = 0; z < width; z++)
+                {
+                    if (idx < data.Length)
+                        blocks[x, y, z] = (BlockType)data[idx++];
+                }
+            }
+        }
+        isModified = true;
     }
 
     /// <summary>
