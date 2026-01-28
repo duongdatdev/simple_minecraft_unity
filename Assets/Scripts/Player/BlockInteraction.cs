@@ -38,11 +38,23 @@ public class BlockInteraction : MonoBehaviour
     private MeshFilter breakOverlayMesh;
     private MeshRenderer breakOverlayRenderer;
 
+    [Header("Eating/Use")]
+    public float holdTimeToEat = 0.3f; // Time to hold right click before eating
+    private float rightClickHoldTime = 0f;
+    private bool rightClickHandled = false;
+
+    private PlayerController playerController;
+
     void Awake()
     {
         if (playerCamera == null) playerCamera = Camera.main;
         if (playerInventory == null) playerInventory = Object.FindAnyObjectByType<Inventory>();
         if (inventoryUI == null) inventoryUI = Object.FindAnyObjectByType<InventoryUI>();
+        
+        // Cache PlayerController reference
+        playerController = GetComponentInParent<PlayerController>();
+        if (playerController == null)
+            playerController = Object.FindAnyObjectByType<PlayerController>();
         
         if (audioSource == null)
             audioSource = GetComponent<AudioSource>();
@@ -141,7 +153,30 @@ public class BlockInteraction : MonoBehaviour
             ResetBreaking();
         }
 
-        if (Input.GetKeyDown(placeKey)) HandleRightClick();
+        // Handle right click: hold to eat, quick click to use/plant
+        if (Input.GetKey(placeKey))
+        {
+            rightClickHoldTime += Time.deltaTime;
+            
+            // If held long enough and not yet handled, try to eat
+            if (rightClickHoldTime >= holdTimeToEat && !rightClickHandled)
+            {
+                rightClickHandled = true;
+                TryEatFood();
+            }
+        }
+        else if (Input.GetKeyUp(placeKey))
+        {
+            // Released: if it was a quick click (not held for eating), handle as use/plant
+            if (rightClickHoldTime < holdTimeToEat)
+            {
+                HandleRightClick();
+            }
+            
+            // Reset
+            rightClickHoldTime = 0f;
+            rightClickHandled = false;
+        }
     }
 
     void UpdateBreaking()
@@ -151,6 +186,23 @@ public class BlockInteraction : MonoBehaviour
             Transform chunkT = hit.collider.transform;
             Chunk chunkComp = chunkT.GetComponent<Chunk>();
             
+            // Check for CropBlock
+            CropBlock cropBlock = hit.collider.GetComponent<CropBlock>();
+            if (cropBlock != null)
+            {
+                chunkComp = cropBlock.chunk;
+                chunkT = chunkComp.transform;
+                // Use the crop's local position directly
+                Vector3Int pos = cropBlock.localPosition;
+                
+                // Override hit point logic for crops
+                int globalX = pos.x + chunkComp.ChunkX * BlockData.ChunkWidth;
+                int globalZ = pos.z + chunkComp.ChunkZ * BlockData.ChunkWidth;
+                
+                HandleBreakingLogic(chunkComp, pos.x, pos.y, pos.z, globalX, globalZ, hit, chunkT);
+                return;
+            }
+
             // If we hit something that is not a chunk (like an item), try to find chunk behind it
             if (chunkComp == null)
             {
@@ -165,6 +217,18 @@ public class BlockInteraction : MonoBehaviour
                         chunkT = h.collider.transform;
                         chunkComp = c;
                         break;
+                    }
+                    // Also check for CropBlock in raycast all
+                    CropBlock cb = h.collider.GetComponent<CropBlock>();
+                    if (cb != null)
+                    {
+                        chunkComp = cb.chunk;
+                        chunkT = chunkComp.transform;
+                        Vector3Int pos = cb.localPosition;
+                        int globalX = pos.x + chunkComp.ChunkX * BlockData.ChunkWidth;
+                        int globalZ = pos.z + chunkComp.ChunkZ * BlockData.ChunkWidth;
+                        HandleBreakingLogic(chunkComp, pos.x, pos.y, pos.z, globalX, globalZ, h, chunkT);
+                        return;
                     }
                 }
             }
@@ -183,9 +247,19 @@ public class BlockInteraction : MonoBehaviour
             int ly = Mathf.FloorToInt(localInside.y);
             int lz = Mathf.FloorToInt(localInside.z);
             
-            int globalX = lx + chunkComp.ChunkX * BlockData.ChunkWidth;
-            int globalZ = lz + chunkComp.ChunkZ * BlockData.ChunkWidth;
+            int gX = lx + chunkComp.ChunkX * BlockData.ChunkWidth;
+            int gZ = lz + chunkComp.ChunkZ * BlockData.ChunkWidth;
             
+            HandleBreakingLogic(chunkComp, lx, ly, lz, gX, gZ, hit, chunkT);
+        }
+        else
+        {
+            ResetBreaking();
+        }
+    }
+
+    void HandleBreakingLogic(Chunk chunkComp, int lx, int ly, int lz, int globalX, int globalZ, RaycastHit hit, Transform chunkT)
+    {
             Vector3Int targetBlock = new Vector3Int(globalX, ly, globalZ);
             
             // Check what block we hit
@@ -221,7 +295,7 @@ public class BlockInteraction : MonoBehaviour
             if (playerInventory != null)
             {
                 ItemStack toolStack = playerInventory.GetSelectedItemStack();
-                if (!toolStack.IsEmpty() && toolStack.item.itemType == ItemType.Tool)
+                if (toolStack != null && !toolStack.IsEmpty() && toolStack.item.itemType == ItemType.Tool)
                 {
                     speedMultiplier = GetToolSpeedMultiplier(hitBlock, toolStack.item);
                 }
@@ -249,11 +323,6 @@ public class BlockInteraction : MonoBehaviour
                 // Update visual stage
                 UpdateOverlayVisual(currentBreakProgress);
             }
-        }
-        else
-        {
-            ResetBreaking();
-        }
     }
 
     float GetToolSpeedMultiplier(BlockType block, Item tool)
@@ -373,10 +442,17 @@ public class BlockInteraction : MonoBehaviour
         if (ItemDatabase.Instance != null)
         {
             Item itemToDrop = null;
+            int dropCount = 1;
+
             // Special-case: breaking IronOre yields an Iron Ingot directly
             if (blockType == BlockType.IronOre)
             {
                 itemToDrop = ItemDatabase.Instance.GetItem("iron_ingot");
+            }
+            else if (blockType >= BlockType.CarrotStage0 && blockType <= BlockType.CarrotStage3)
+            {
+                itemToDrop = ItemDatabase.Instance.GetItem("carrot");
+                if (blockType == BlockType.CarrotStage3) dropCount = 2;
             }
             else
             {
@@ -387,7 +463,7 @@ public class BlockInteraction : MonoBehaviour
             {
                 // Spawn at exact block center
                 Vector3 blockCenter = new Vector3(globalX + 0.5f, ly + 0.5f, globalZ + 0.5f);
-                SpawnDroppedItem(itemToDrop, blockCenter);
+                SpawnDroppedItem(itemToDrop, blockCenter, dropCount);
             }
         }
 
@@ -395,7 +471,7 @@ public class BlockInteraction : MonoBehaviour
         if (playerInventory != null)
         {
             ItemStack selectedStack = playerInventory.GetSelectedItemStack();
-            if (!selectedStack.IsEmpty() && selectedStack.item.itemType == ItemType.Tool)
+            if (selectedStack != null && !selectedStack.IsEmpty() && selectedStack.item.itemType == ItemType.Tool)
             {
                 bool broke = playerInventory.DamageSelectedTool(1);
                 if (broke)
@@ -435,19 +511,86 @@ public class BlockInteraction : MonoBehaviour
             }
         }
 
-        // 2. Check for Item Usage (Eating)
+        // 2. Check for Item Usage (Eating) and Tool Usage (Hoe/Planting)
         if (playerInventory != null)
         {
             ItemStack selectedStack = playerInventory.GetSelectedItemStack();
-            if (!selectedStack.IsEmpty() && selectedStack.item.isConsumable)
+            if (selectedStack != null && !selectedStack.IsEmpty())
             {
-                PlayerController pc = GetComponentInParent<PlayerController>();
-                if (pc != null)
+                // Hoe / Carrot Planting Logic
+                if (Physics.Raycast(playerCamera.transform.position, playerCamera.transform.forward, out hit, reach, chunkLayer))
                 {
-                    pc.Eat(selectedStack.item.hungerAmount, selectedStack.item.healAmount);
-                    playerInventory.ConsumeSelectedItem(1);
-                    return; // Consumed click
+                    Transform chunkT = hit.collider.transform;
+                    Chunk chunkComp = chunkT.GetComponent<Chunk>();
+                    
+                    // Handle CropBlock hit for planting/hoeing (though usually you plant ON farmland, not ON crop)
+                    CropBlock cropBlock = hit.collider.GetComponent<CropBlock>();
+                    if (cropBlock != null)
+                    {
+                        chunkComp = cropBlock.chunk;
+                        chunkT = chunkComp.transform;
+                        // If we hit a crop, we might be trying to interact with the block BELOW it (farmland) or just fail
+                        // For now, let's assume we want to interact with the crop block itself (e.g. bonemeal?)
+                        // But for planting, we need to hit the farmland.
+                        // If we hit a crop, we are looking at the crop.
+                    }
+
+                    if (chunkComp != null)
+                    {
+                        int bx, by, bz;
+                        
+                        if (cropBlock != null)
+                        {
+                            bx = cropBlock.localPosition.x;
+                            by = cropBlock.localPosition.y;
+                            bz = cropBlock.localPosition.z;
+                        }
+                        else
+                        {
+                            Vector3 localHit = chunkT.InverseTransformPoint(hit.point);
+                            Vector3 localNormal = chunkT.InverseTransformDirection(hit.normal);
+                            Vector3 localInside = localHit - localNormal * 0.01f;
+                            bx = Mathf.FloorToInt(localInside.x);
+                            by = Mathf.FloorToInt(localInside.y);
+                            bz = Mathf.FloorToInt(localInside.z);
+                        }
+                        
+                        int globalX = bx + chunkComp.ChunkX * BlockData.ChunkWidth;
+                        int globalZ = bz + chunkComp.ChunkZ * BlockData.ChunkWidth;
+
+                        BlockType hitBlock = chunkComp.GetBlockLocal(bx, by, bz);
+
+                        // Hoe Logic
+                        if (selectedStack.item.toolType == ToolType.Hoe)
+                        {
+                            if (hitBlock == BlockType.Dirt || hitBlock == BlockType.Grass)
+                            {
+                                WorldGenerator.Instance.SetBlockAtGlobal(globalX, by, globalZ, BlockType.Farmland);
+                                if (audioSource && placeSound) audioSource.PlayOneShot(placeSound);
+                                return;
+                            }
+                        }
+                        
+                        // Carrot Planting Logic
+                        if (selectedStack.item.itemName == "carrot")
+                        {
+                            if (hitBlock == BlockType.Farmland)
+                            {
+                                // Place carrot above
+                                int aboveY = by + 1;
+                                if (aboveY < BlockData.ChunkHeight && !WorldGenerator.Instance.IsBlockSolidAtGlobal(globalX, aboveY, globalZ))
+                                {
+                                    WorldGenerator.Instance.SetBlockAtGlobal(globalX, aboveY, globalZ, BlockType.CarrotStage0);
+                                    playerInventory.ConsumeSelectedItem(1);
+                                    if (audioSource && placeSound) audioSource.PlayOneShot(placeSound);
+                                    return;
+                                }
+                            }
+                        }
+                    }
                 }
+
+                // Removed eating from quick click - now handled by hold timer in Update()
             }
         }
 
@@ -505,7 +648,7 @@ public class BlockInteraction : MonoBehaviour
         if (playerInventory == null) return;
 
         ItemStack selectedStack = playerInventory.GetSelectedItemStack();
-        if (selectedStack.IsEmpty() || selectedStack.item.itemType != ItemType.Block)
+        if (selectedStack == null || selectedStack.IsEmpty() || selectedStack.item.itemType != ItemType.Block)
         {
             // Debug.Log("No block selected in hotbar!");
             return;
@@ -521,7 +664,7 @@ public class BlockInteraction : MonoBehaviour
         playerInventory.RemoveItem(selectedStack.item.itemName, 1);
     }
 
-    void SpawnDroppedItem(Item item, Vector3 position)
+    void SpawnDroppedItem(Item item, Vector3 position, int count = 1)
     {
         if (droppedItemPrefab != null)
         {
@@ -529,7 +672,7 @@ public class BlockInteraction : MonoBehaviour
             DroppedItem dropScript = dropObj.GetComponent<DroppedItem>();
             if (dropScript != null)
             {
-                dropScript.Initialize(item, 1);
+                dropScript.Initialize(item, count);
             }
 
             Rigidbody rb = dropObj.GetComponent<Rigidbody>();
@@ -543,7 +686,38 @@ public class BlockInteraction : MonoBehaviour
         else
         {
             // Fallback if prefab is not assigned
-            DroppedItem.SpawnDroppedItem(position, new ItemStack(item, 1), Vector3.zero);
+            DroppedItem.SpawnDroppedItem(position, new ItemStack(item, count), Vector3.zero);
+        }
+    }
+
+    void TryEatFood()
+    {
+        if (playerInventory == null)
+        {
+            Debug.LogWarning("playerInventory is null in TryEatFood");
+            return;
+        }
+
+        ItemStack selectedStack = playerInventory.GetSelectedItemStack();
+        if (selectedStack != null && !selectedStack.IsEmpty() && selectedStack.item != null && selectedStack.item.isConsumable)
+        {
+            // Cache item details before mutating inventory in case ConsumeSelectedItem clears the stack/item
+            Item foodItem = selectedStack.item;
+            int hunger = foodItem.hungerAmount;
+            int heal = foodItem.healAmount;
+            string name = foodItem.itemName;
+
+            if (playerController != null)
+            {
+                playerController.Eat(hunger, heal);
+                // Consume item after applying effects
+                playerInventory.ConsumeSelectedItem(1);
+                Debug.Log($"Ate {name}");
+            }
+            else
+            {
+                Debug.LogError("PlayerController not found! Cannot eat food.");
+            }
         }
     }
 }

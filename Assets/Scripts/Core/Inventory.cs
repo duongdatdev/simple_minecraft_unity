@@ -68,6 +68,29 @@ public class Inventory : MonoBehaviour
 
         // Initialize default recipes at runtime if none are assigned in inspector
         InitializeDefaultRecipes();
+
+        // Give starter items (one carrot) if player doesn't already have one
+        if (ItemDatabase.Instance != null)
+        {
+            Item carrotItem = ItemDatabase.Instance.GetItem("carrot");
+            if (carrotItem != null)
+            {
+                bool hasCarrot = false;
+                for (int i = 0; i < TOTAL_SIZE; i++)
+                {
+                    if (!slots[i].IsEmpty() && slots[i].item.itemName == "carrot")
+                    {
+                        hasCarrot = true;
+                        break;
+                    }
+                }
+
+                if (!hasCarrot)
+                {
+                    AddItem(carrotItem, 1);
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -169,6 +192,12 @@ public class Inventory : MonoBehaviour
         CreateRecipe3x3(new Item[] { null, cobble, null, null, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("stone_shovel"), 1);
         CreateRecipe3x3(new Item[] { null, iron, null, null, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("iron_shovel"), 1);
         CreateRecipe3x3(new Item[] { null, diamond, null, null, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("diamond_shovel"), 1);
+        
+        // --- HOES ---
+        CreateRecipe3x3(new Item[] { planks, planks, null, null, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("wooden_hoe"), 1);
+        CreateRecipe3x3(new Item[] { cobble, cobble, null, null, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("stone_hoe"), 1);
+        CreateRecipe3x3(new Item[] { iron, iron, null, null, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("iron_hoe"), 1);
+        CreateRecipe3x3(new Item[] { diamond, diamond, null, null, stick, null, null, stick, null }, ItemDatabase.Instance.GetItem("diamond_hoe"), 1);
     }
 
     private void CreateRecipe2x2(Item[] ingredients, Item result, int count)

@@ -30,6 +30,7 @@ public class ItemDatabase : MonoBehaviour
     public Sprite diamondIcon; // Add this field
     public Sprite porkchopIcon;
     public Sprite cookedPorkchopIcon;
+    public Sprite carrotIcon;
 
     [Header("Armor Icons")]
     public Sprite ironHelmetIcon;
@@ -111,6 +112,7 @@ public class ItemDatabase : MonoBehaviour
         // Food
         RegisterItem(CreateFoodItem("porkchop", "Raw Porkchop", 3, 2, porkchopIcon));
         RegisterItem(CreateFoodItem("cooked_porkchop", "Cooked Porkchop", 8, 6, cookedPorkchopIcon));
+        RegisterItem(CreateFoodItem("carrot", "Carrot", 2, 2, carrotIcon));
 
         // Armor
         RegisterItem(CreateArmorItem("iron_helmet", "Iron Helmet", ArmorType.Helmet, 2, ironHelmetIcon));

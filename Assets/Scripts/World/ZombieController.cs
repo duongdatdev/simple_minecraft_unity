@@ -49,11 +49,17 @@ public class ZombieController : MonoBehaviour
     private Rigidbody rb;
     private bool isGrounded;
 
+    [Header("Spawn / Grounding")]
+    public float groundCheckDistance = 10f;
+    public float groundCheckInterval = 0.5f;
+    private bool waitingForGround = false;
+
     void Start()
     {
         GameObject playerObj = GameObject.FindGameObjectWithTag("Player");
         if (playerObj != null) player = playerObj.transform;
         rb = GetComponent<Rigidbody>();
+        if (rb != null) rb.isKinematic = false;
         rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
         renderers = GetComponentsInChildren<Renderer>();
         originalColors = new Color[renderers.Length];
@@ -79,10 +85,16 @@ public class ZombieController : MonoBehaviour
         maxHealth = Mathf.RoundToInt(maxHealth * difficultyMultiplier);
         damage = Mathf.RoundToInt(damage * difficultyMultiplier);
         currentHealth = maxHealth; 
+
+        // If the world/chunk hasn't finished loading colliders yet the zombie might spawn in empty space.
+        // Ensure we find ground before enabling normal physics and movement.
+        EnsureOnGround();
     }
 
     void Update()
     {
+        if (waitingForGround) return;
+
         // Idle sounds
         idleTimer -= Time.deltaTime;
         if (idleTimer <= 0)
@@ -121,7 +133,11 @@ public class ZombieController : MonoBehaviour
                         TryStepUp(transform.forward);
                     }
 
-                    rb.linearVelocity = new Vector3(moveDir.x, rb.linearVelocity.y, moveDir.z);
+                    // Only set velocity when we have a non-kinematic rigidbody
+                    if (rb != null && !rb.isKinematic)
+                    {
+                        rb.linearVelocity = new Vector3(moveDir.x, rb.linearVelocity.y, moveDir.z);
+                    }
                 }
                 else
                 {
@@ -214,7 +230,7 @@ public class ZombieController : MonoBehaviour
             if (col != null) col.enabled = false;
             rb.isKinematic = true;
             DropLoot();
-            Destroy(gameObject, 2f);
+            Destroy(gameObject, 0.5f);
         }
         else
         {
@@ -241,6 +257,16 @@ public class ZombieController : MonoBehaviour
         if (Random.value < 0.2f)
         {
             SpawnItem("iron_ingot");
+        }
+
+        if (Random.value < 0.05f)
+        {
+            SpawnItem("iron_sword");
+        }
+        
+        if (Random.value < 0.5f)
+        {
+            SpawnItem("carrot");
         }
     }
 
@@ -271,8 +297,54 @@ public class ZombieController : MonoBehaviour
         }
     }
 
+    // Ensure the zombie doesn't spawn into empty space when chunks haven't loaded.
+    private void EnsureOnGround()
+    {
+        if (waitingForGround) return;
+        Vector3 origin = transform.position;
+        if (Physics.Raycast(origin, Vector3.down, out RaycastHit hit, groundCheckDistance))
+        {
+            float desiredY = hit.point.y + 0.1f;
+            if (transform.position.y < desiredY - 0.01f)
+            {
+                transform.position = new Vector3(transform.position.x, desiredY, transform.position.z);
+            }
+            if (rb != null) rb.isKinematic = false;
+            isGrounded = true;
+            waitingForGround = false;
+        }
+        else
+        {
+            if (rb != null) rb.isKinematic = true;
+            waitingForGround = true;
+            StartCoroutine(WaitForGroundRoutine());
+        }
+    }
+
+    private System.Collections.IEnumerator WaitForGroundRoutine()
+    {
+        while (true)
+        {
+            Vector3 origin = transform.position + Vector3.up * groundCheckDistance;
+            if (Physics.Raycast(origin, Vector3.down, out RaycastHit hit, groundCheckDistance * 2f))
+            {
+                transform.position = new Vector3(transform.position.x, hit.point.y + 0.1f, transform.position.z);
+                if (rb != null)
+                {
+                    rb.isKinematic = false;
+                    rb.linearVelocity = Vector3.zero;
+                }
+                isGrounded = true;
+                waitingForGround = false;
+                yield break;
+            }
+            yield return new WaitForSeconds(groundCheckInterval);
+        }
+    }
+
     void FixedUpdate()
     {
+        if (waitingForGround) return;
         // Keep checking for obstacles each physics step so the zombie can step up while moving.
         TryStepUp(transform.forward);
     }
@@ -296,10 +368,11 @@ public class ZombieController : MonoBehaviour
                     Vector3 clearanceCheck = new Vector3(groundHit.point.x, groundHit.point.y + 0.5f, groundHit.point.z);
                     if (!Physics.CheckSphere(clearanceCheck, 0.25f))
                     {
-                        if (isGrounded)
+                        if (isGrounded && rb != null && !rb.isKinematic)
                         {
                             float requiredV = Mathf.Sqrt(2f * Mathf.Abs(Physics.gravity.y) * (stepHeight + 0.05f));
-                            rb.linearVelocity = new Vector3(rb.linearVelocity.x, requiredV, rb.linearVelocity.z);
+                            Vector3 current = rb.linearVelocity;
+                            rb.linearVelocity = new Vector3(current.x, requiredV, current.z);
                             isGrounded = false;
                             // Jump animation not implemented yet; uncomment when ready
                             // if (animator != null)

@@ -131,9 +131,16 @@ MonoBehaviour:
   ironVeinSizeMax: 10
   ironMaxHeight: 64
   blockTextures: []
+  carrotSprites:
+  - {fileID: 21300000, guid: 1b50fb3a3e247e741b44b1deb72c0680, type: 3}
+  - {fileID: 21300000, guid: f1d8976be50eb124c8548ecdddc90be0, type: 3}
+  - {fileID: 21300000, guid: 30c654cbf62c545438f898f31bf2a0cc, type: 3}
+  - {fileID: 21300000, guid: 63cfab4e19907824d90c121d4241f214, type: 3}
+  cropMaterial: {fileID: 2100000, guid: 7d36c3c4e43d0434087cc0768b536392, type: 2}
   debugLogCounts: 0
   ambientLightLevel: 2
   debugLogUVs: 0
   debugSampleX: -1
   debugSampleY: -1
   debugSampleZ: -1
+  isModified: 0

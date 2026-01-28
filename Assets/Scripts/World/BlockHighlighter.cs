@@ -111,7 +111,7 @@ public class BlockHighlighterLines : MonoBehaviour
     {
         Ray ray = new Ray(cam.transform.position, cam.transform.forward);
 
-        // Bắn ray
+        // Raycast to find targeted block
         if (Physics.Raycast(ray, out RaycastHit hit, maxDistance, blockLayer.value))
         {
             // Check if we hit a chunk

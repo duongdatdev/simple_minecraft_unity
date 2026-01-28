@@ -13,5 +13,10 @@ public enum BlockType
     Planks,
     CraftingTable,
     IronOre,
-    Bedrock
+    Bedrock,
+    Farmland,
+    CarrotStage0,
+    CarrotStage1,
+    CarrotStage2,
+    CarrotStage3
 }

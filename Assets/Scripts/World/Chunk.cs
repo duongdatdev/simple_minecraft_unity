@@ -29,6 +29,11 @@ public class Chunk : MonoBehaviour
     private List<Color> colors = new List<Color>();
     private List<Vector2> uv2s = new List<Vector2>();
 
+    // Collision mesh data
+    private Mesh collisionMesh;
+    private List<Vector3> colVertices = new List<Vector3>();
+    private List<int> colTriangles = new List<int>();
+
     // lighting arrays (per chunk)
     private byte[,,] skyLight;
     private byte[,,] blockLight;
@@ -78,6 +83,11 @@ public class Chunk : MonoBehaviour
     [Header("Block Texture Data (assign assets)")]
     public BlockTextureData[] blockTextures; // assign ScriptableObjects in inspector
 
+    [Header("Crops")]
+    public Sprite[] carrotSprites; // 0-3
+    public Material cropMaterial; // Assign a Cutout/Transparent material here
+    private List<GameObject> cropObjects = new List<GameObject>();
+
     [Header("Debug")] public bool debugLogCounts = false;
     
     [Header("Lighting Settings")]
@@ -105,14 +115,18 @@ public class Chunk : MonoBehaviour
     public int ChunkX => chunkX;
     public int ChunkZ => chunkZ;
 
-    private void Awake()
-    {
-        meshFilter = GetComponent<MeshFilter>();
-        meshCollider = GetComponent<MeshCollider>();
+    // True when the mesh collider has been applied and there is no pending collider update.
+    public bool IsColliderReady => meshCollider != null && meshCollider.sharedMesh == collisionMesh && !colliderPending;
 
-        mesh = new Mesh { name = "ChunkMesh" };
-        // assign mesh to filter to reuse instance and avoid allocations
-        meshFilter.mesh = mesh;
+        private void Awake()
+        {
+            meshFilter = GetComponent<MeshFilter>();
+            meshCollider = GetComponent<MeshCollider>();
+
+            mesh = new Mesh { name = "ChunkMesh" };
+            collisionMesh = new Mesh { name = "ChunkCollisionMesh" };
+            // assign mesh to filter to reuse instance and avoid allocations
+            meshFilter.mesh = mesh;
 
         // Initialize lighting arrays so skylight/blockLight are not null.
         InitLightArrays();
@@ -141,6 +155,9 @@ public class Chunk : MonoBehaviour
         {
             needsRebuild = false;
             BuildMesh();
+            // Update collider immediately after mesh rebuild for player movement
+            UpdateCollider();
+            colliderPending = false;
         }
 
         // apply vertex color updates that were marked dirty (batched)
@@ -150,11 +167,17 @@ public class Chunk : MonoBehaviour
             lightColorsDirty = false;
         }
 
-        // handle delayed collider update
+        // handle delayed collider update (for cases where only collider needs update)
         if (colliderPending && Time.time - lastDirtyTime >= colliderDelay)
         {
             UpdateCollider();
             colliderPending = false;
+        }
+
+        // Random Tick for crops
+        if (Time.frameCount % 60 == 0) // Every 60 frames (approx 1 sec)
+        {
+            RandomTick();
         }
     }
 
@@ -199,8 +222,12 @@ public class Chunk : MonoBehaviour
         if (buildMesh)
         {
             BuildMesh(); // initial mesh build (not throttled)
-            UpdateCollider(); // initial collider
         }
+        
+        // ALWAYS update collider even if visual mesh is deferred
+        // This ensures player can walk on terrain immediately
+        InitializeCollisionMesh();
+        UpdateCollider();
     }
 
     private void GenerateBlocksFromNoise()
@@ -624,6 +651,16 @@ public class Chunk : MonoBehaviour
         colors.Clear();
         uv2s.Clear();
         vertexLightInfos.Clear();
+        
+        colVertices.Clear();
+        colTriangles.Clear();
+
+        // Clear old crop objects
+        foreach (var obj in cropObjects)
+        {
+            if (obj != null) Destroy(obj);
+        }
+        cropObjects.Clear();
 
         int faceCount = 0;
 
@@ -633,31 +670,46 @@ public class Chunk : MonoBehaviour
             {
                 for (int z = 0; z < BlockData.ChunkWidth; z++)
                 {
-                    if (!BlockData.IsSolid(blocks[x, y, z])) continue;
+                    BlockType type = blocks[x, y, z];
+                    if (type == BlockType.Air) continue;
 
                     Vector3Int pos = new Vector3Int(x, y, z);
 
-                    for (int face = 0; face < 6; face++)
+                    if (BlockData.IsCrop(type))
                     {
-                        Vector3Int neighbor = pos + BlockData.FaceChecks[face];
+                        SpawnCropSprite(pos, type);
+                        continue; // Skip mesh generation for crops
+                    }
 
-                        bool drawFace = false;
-                        if (neighbor.x < 0 || neighbor.x >= BlockData.ChunkWidth ||
-                            neighbor.y < 0 || neighbor.y >= BlockData.ChunkHeight ||
-                            neighbor.z < 0 || neighbor.z >= BlockData.ChunkWidth)
+                    if (BlockData.IsSolid(type))
+                    {
+                        for (int face = 0; face < 6; face++)
                         {
-                            drawFace = true;
-                        }
-                        else if (!BlockData.IsSolid(blocks[neighbor.x, neighbor.y, neighbor.z]))
-                        {
-                            drawFace = true;
-                        }
+                            Vector3Int neighbor = pos + BlockData.FaceChecks[face];
 
-                        if (drawFace)
-                        {
-                            AddFace(pos, face);
-                            faceCount++;
+                            bool drawFace = false;
+                            if (neighbor.x < 0 || neighbor.x >= BlockData.ChunkWidth ||
+                                neighbor.y < 0 || neighbor.y >= BlockData.ChunkHeight ||
+                                neighbor.z < 0 || neighbor.z >= BlockData.ChunkWidth)
+                            {
+                                drawFace = true;
+                            }
+                            else if (!BlockData.IsSolid(blocks[neighbor.x, neighbor.y, neighbor.z]))
+                            {
+                                drawFace = true;
+                            }
+
+                            if (drawFace)
+                            {
+                                AddFace(pos, face);
+                                AddCollisionFace(pos, face);
+                                faceCount++;
+                            }
                         }
+                    }
+                    else if (BlockData.IsCrossMesh(type))
+                    {
+                        AddCrossMesh(pos);
                     }
                 }
             }
@@ -673,6 +725,13 @@ public class Chunk : MonoBehaviour
 
         ApplyLightColorsToMesh();
         meshFilter.mesh = mesh;
+        
+        // Update Collision Mesh
+        collisionMesh.Clear();
+        collisionMesh.SetVertices(colVertices);
+        collisionMesh.SetTriangles(colTriangles, 0);
+        collisionMesh.RecalculateNormals();
+        collisionMesh.RecalculateBounds();
 
         // debug: print transform determinant
         // float detDebug = transform.localToWorldMatrix.determinant;
@@ -959,7 +1018,56 @@ public class Chunk : MonoBehaviour
     {
         // Assign existing mesh to collider (clear then assign helps in some cases)
         meshCollider.sharedMesh = null;
-        meshCollider.sharedMesh = mesh;
+        meshCollider.sharedMesh = collisionMesh;
+    }
+
+    private void InitializeCollisionMesh()
+    {
+        // Build collision mesh immediately for all solid blocks
+        colVertices.Clear();
+        colTriangles.Clear();
+
+        for (int x = 0; x < BlockData.ChunkWidth; x++)
+        {
+            for (int y = 0; y < BlockData.ChunkHeight; y++)
+            {
+                for (int z = 0; z < BlockData.ChunkWidth; z++)
+                {
+                    BlockType type = blocks[x, y, z];
+                    if (!BlockData.IsSolid(type)) continue;
+
+                    Vector3Int pos = new Vector3Int(x, y, z);
+
+                    for (int face = 0; face < 6; face++)
+                    {
+                        Vector3Int neighbor = pos + BlockData.FaceChecks[face];
+
+                        bool drawFace = false;
+                        if (neighbor.x < 0 || neighbor.x >= BlockData.ChunkWidth ||
+                            neighbor.y < 0 || neighbor.y >= BlockData.ChunkHeight ||
+                            neighbor.z < 0 || neighbor.z >= BlockData.ChunkWidth)
+                        {
+                            drawFace = true;
+                        }
+                        else if (!BlockData.IsSolid(blocks[neighbor.x, neighbor.y, neighbor.z]))
+                        {
+                            drawFace = true;
+                        }
+
+                        if (drawFace)
+                        {
+                            AddCollisionFace(pos, face);
+                        }
+                    }
+                }
+            }
+        }
+
+        collisionMesh.Clear();
+        collisionMesh.SetVertices(colVertices);
+        collisionMesh.SetTriangles(colTriangles, 0);
+        collisionMesh.RecalculateNormals();
+        collisionMesh.RecalculateBounds();
     }
 
     /// <summary>
@@ -1066,6 +1174,255 @@ public class Chunk : MonoBehaviour
             y < 0 || y >= BlockData.ChunkHeight ||
             lz < 0 || lz >= BlockData.ChunkWidth) return 0;
         return skyLight[lx, y, lz];
+    }
+
+    private void AddCollisionFace(Vector3Int blockPos, int face)
+    {
+        int[] fv = BlockData.FaceVertices[face];
+        int baseIndex = colVertices.Count;
+
+        // add 4 vertices for the face
+        colVertices.Add(blockPos + BlockData.Verts[fv[0]]);
+        colVertices.Add(blockPos + BlockData.Verts[fv[1]]);
+        colVertices.Add(blockPos + BlockData.Verts[fv[2]]);
+        colVertices.Add(blockPos + BlockData.Verts[fv[3]]);
+
+        // add triangles
+        colTriangles.Add(baseIndex + 0);
+        colTriangles.Add(baseIndex + 1);
+        colTriangles.Add(baseIndex + 2);
+        colTriangles.Add(baseIndex + 0);
+        colTriangles.Add(baseIndex + 2);
+        colTriangles.Add(baseIndex + 3);
+    }
+
+    private void AddCrossMesh(Vector3Int pos)
+    {
+        int baseIndex = vertices.Count;
+        
+        // Plane 1 (Diagonal 1)
+        vertices.Add(pos + new Vector3(0, 0, 0)); // 0
+        vertices.Add(pos + new Vector3(1, 0, 1)); // 1
+        vertices.Add(pos + new Vector3(1, 1, 1)); // 2
+        vertices.Add(pos + new Vector3(0, 1, 0)); // 3
+        
+        // Plane 2 (Diagonal 2)
+        vertices.Add(pos + new Vector3(0, 0, 1)); // 4
+        vertices.Add(pos + new Vector3(1, 0, 0)); // 5
+        vertices.Add(pos + new Vector3(1, 1, 0)); // 6
+        vertices.Add(pos + new Vector3(0, 1, 1)); // 7
+        
+        // Triangles (Double sided)
+        // Plane 1
+        triangles.Add(baseIndex + 0); triangles.Add(baseIndex + 2); triangles.Add(baseIndex + 1);
+        triangles.Add(baseIndex + 0); triangles.Add(baseIndex + 3); triangles.Add(baseIndex + 2);
+        triangles.Add(baseIndex + 0); triangles.Add(baseIndex + 1); triangles.Add(baseIndex + 2);
+        triangles.Add(baseIndex + 0); triangles.Add(baseIndex + 2); triangles.Add(baseIndex + 3);
+        
+        // Plane 2
+        triangles.Add(baseIndex + 4); triangles.Add(baseIndex + 6); triangles.Add(baseIndex + 5);
+        triangles.Add(baseIndex + 4); triangles.Add(baseIndex + 7); triangles.Add(baseIndex + 6);
+        triangles.Add(baseIndex + 4); triangles.Add(baseIndex + 5); triangles.Add(baseIndex + 6);
+        triangles.Add(baseIndex + 4); triangles.Add(baseIndex + 6); triangles.Add(baseIndex + 7);
+        
+        // UVs
+        BlockType type = blocks[pos.x, pos.y, pos.z];
+        BlockTextureData data = FindTextureData(type);
+        Vector2[] uvsArr = data != null ? data.GetFaceUVs(0) : TextureAtlas.GetUVsFromTile(0, 0);
+        
+        // Plane 1
+        uvs.Add(uvsArr[0]); uvs.Add(uvsArr[1]); uvs.Add(uvsArr[2]); uvs.Add(uvsArr[3]);
+        // Plane 2
+        uvs.Add(uvsArr[0]); uvs.Add(uvsArr[1]); uvs.Add(uvsArr[2]); uvs.Add(uvsArr[3]);
+        
+        // Colors (White)
+        for(int i=0; i<8; i++) colors.Add(Color.white);
+        
+        // Vertex Light Info
+        // 0: 0,0,0
+        vertexLightInfos.Add(new VertexLightInfo { bx = pos.x, by = pos.y, bz = pos.z, cornerX = 0, cornerY = 0, cornerZ = 0, tint = Color.white });
+        // 1: 1,0,1
+        vertexLightInfos.Add(new VertexLightInfo { bx = pos.x, by = pos.y, bz = pos.z, cornerX = 1, cornerY = 0, cornerZ = 1, tint = Color.white });
+        // 2: 1,1,1
+        vertexLightInfos.Add(new VertexLightInfo { bx = pos.x, by = pos.y, bz = pos.z, cornerX = 1, cornerY = 1, cornerZ = 1, tint = Color.white });
+        // 3: 0,1,0
+        vertexLightInfos.Add(new VertexLightInfo { bx = pos.x, by = pos.y, bz = pos.z, cornerX = 0, cornerY = 1, cornerZ = 0, tint = Color.white });
+        
+        // 4: 0,0,1
+        vertexLightInfos.Add(new VertexLightInfo { bx = pos.x, by = pos.y, bz = pos.z, cornerX = 0, cornerY = 0, cornerZ = 1, tint = Color.white });
+        // 5: 1,0,0
+        vertexLightInfos.Add(new VertexLightInfo { bx = pos.x, by = pos.y, bz = pos.z, cornerX = 1, cornerY = 0, cornerZ = 0, tint = Color.white });
+        // 6: 1,1,0
+        vertexLightInfos.Add(new VertexLightInfo { bx = pos.x, by = pos.y, bz = pos.z, cornerX = 1, cornerY = 1, cornerZ = 0, tint = Color.white });
+        // 7: 0,1,1
+        vertexLightInfos.Add(new VertexLightInfo { bx = pos.x, by = pos.y, bz = pos.z, cornerX = 0, cornerY = 1, cornerZ = 1, tint = Color.white });
+    }
+
+    private void SpawnCropSprite(Vector3Int pos, BlockType type)
+    {
+        if (carrotSprites == null || carrotSprites.Length < 4) return;
+
+        int stage = 0;
+        if (type == BlockType.CarrotStage0) stage = 0;
+        else if (type == BlockType.CarrotStage1) stage = 1;
+        else if (type == BlockType.CarrotStage2) stage = 2;
+        else if (type == BlockType.CarrotStage3) stage = 3;
+
+        Sprite sprite = carrotSprites[stage];
+        if (sprite == null) return;
+
+        GameObject cropObj = new GameObject("Crop_" + pos);
+        cropObj.transform.SetParent(this.transform);
+        cropObj.transform.localPosition = pos; // Local position is the corner (0,0,0) of the block
+
+        MeshFilter mf = cropObj.AddComponent<MeshFilter>();
+        MeshRenderer mr = cropObj.AddComponent<MeshRenderer>();
+
+        // Generate Mesh
+        Mesh mesh = new Mesh();
+        List<Vector3> verts = new List<Vector3>();
+        List<int> tris = new List<int>();
+        List<Vector2> uvs = new List<Vector2>();
+
+        // Calculate UV bounds from sprite (handles atlases if not rotated)
+        Vector2[] sUVs = sprite.uv;
+        float minX = float.MaxValue, minY = float.MaxValue;
+        float maxX = float.MinValue, maxY = float.MinValue;
+        foreach (var uv in sUVs)
+        {
+            if (uv.x < minX) minX = uv.x;
+            if (uv.y < minY) minY = uv.y;
+            if (uv.x > maxX) maxX = uv.x;
+            if (uv.y > maxY) maxY = uv.y;
+        }
+        
+        // BL, BR, TR, TL
+        Vector2 bl = new Vector2(minX, minY);
+        Vector2 br = new Vector2(maxX, minY);
+        Vector2 tr = new Vector2(maxX, maxY);
+        Vector2 tl = new Vector2(minX, maxY);
+        
+        Vector2[] quadUVs = new Vector2[] { bl, br, tr, tl };
+
+        // Helper to add quad
+        void AddQuad(Vector3 v0, Vector3 v1, Vector3 v2, Vector3 v3, Vector2[] qUVs)
+        {
+            int baseIdx = verts.Count;
+            verts.Add(v0);
+            verts.Add(v1);
+            verts.Add(v2);
+            verts.Add(v3);
+            
+            tris.Add(baseIdx + 0);
+            tris.Add(baseIdx + 2);
+            tris.Add(baseIdx + 1);
+            tris.Add(baseIdx + 0);
+            tris.Add(baseIdx + 3);
+            tris.Add(baseIdx + 2);
+
+            uvs.Add(qUVs[0]); // BL
+            uvs.Add(qUVs[1]); // BR
+            uvs.Add(qUVs[2]); // TR
+            uvs.Add(qUVs[3]); // TL
+        }
+        
+        // Vertices
+        Vector3 p0 = new Vector3(0, 0, 0);
+        Vector3 p1 = new Vector3(1, 0, 0);
+        Vector3 p2 = new Vector3(1, 1, 0);
+        Vector3 p3 = new Vector3(0, 1, 0);
+        Vector3 p4 = new Vector3(0, 0, 1);
+        Vector3 p5 = new Vector3(1, 0, 1);
+        Vector3 p6 = new Vector3(1, 1, 1);
+        Vector3 p7 = new Vector3(0, 1, 1);
+
+        // Front (Z+): 4, 5, 6, 7
+        AddQuad(p4, p5, p6, p7, quadUVs);
+        
+        // Back (Z-): 1, 0, 3, 2
+        AddQuad(p1, p0, p3, p2, quadUVs);
+        
+        // Left (X-): 0, 4, 7, 3
+        AddQuad(p0, p4, p7, p3, quadUVs);
+        
+        // Right (X+): 5, 1, 2, 6
+        AddQuad(p5, p1, p2, p6, quadUVs);
+
+        mesh.SetVertices(verts);
+        mesh.SetTriangles(tris, 0);
+        mesh.SetUVs(0, uvs);
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        
+        mf.mesh = mesh;
+
+        // Material and Texture Setup
+        Material mat;
+        if (cropMaterial != null)
+        {
+            mat = new Material(cropMaterial); // Clone material
+        }
+        else
+        {
+            // Create material with Cutout shader
+            mat = new Material(Shader.Find("Standard"));
+            mat.SetFloat("_Mode", 1); // Cutout mode
+            mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
+            mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
+            mat.SetInt("_ZWrite", 1);
+            mat.EnableKeyword("_ALPHATEST_ON");
+            mat.DisableKeyword("_ALPHABLEND_ON");
+            mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            mat.renderQueue = 2450;
+        }
+        
+        // Assign texture directly to material
+        mat.mainTexture = sprite.texture;
+        mr.material = mat;
+
+        // Collider
+        BoxCollider col = cropObj.AddComponent<BoxCollider>();
+        col.center = new Vector3(0.5f, 0.5f, 0.5f);
+        col.size = new Vector3(0.8f, 0.8f, 0.8f);
+        col.isTrigger = true;
+
+        CropBlock cb = cropObj.AddComponent<CropBlock>();
+        cb.chunk = this;
+        cb.localPosition = pos;
+
+        cropObj.layer = this.gameObject.layer;
+        cropObjects.Add(cropObj);
+    }
+
+    private void RandomTick()
+    {
+        bool anyGrowth = false;
+        
+        // Iterate through all crop objects instead of random sampling
+        foreach (var cropObj in cropObjects)
+        {
+            if (cropObj == null) continue;
+            
+            CropBlock cropBlock = cropObj.GetComponent<CropBlock>();
+            if (cropBlock == null) continue;
+            
+            Vector3Int pos = cropBlock.localPosition;
+            BlockType type = blocks[pos.x, pos.y, pos.z];
+            
+            if (type >= BlockType.CarrotStage0 && type < BlockType.CarrotStage3)
+            {
+                if (UnityEngine.Random.value < 0.3f)
+                {
+                    blocks[pos.x, pos.y, pos.z] = type + 1;
+                    anyGrowth = true;
+                }
+            }
+        }
+        
+        if (anyGrowth)
+        {
+            BuildMesh();
+        }
     }
 }
 

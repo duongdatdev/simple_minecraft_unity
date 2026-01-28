@@ -39,6 +39,8 @@ public class WorldGenerator : MonoBehaviour
 
     // fast lookup of spawned chunks by chunk coordinates
     private Dictionary<Vector2Int, Chunk> chunkDict = new Dictionary<Vector2Int, Chunk>();
+    // Saved chunk data loaded from save file (keyed by chunk coords)
+    private Dictionary<Vector2Int, int[]> savedChunkBlocks = new Dictionary<Vector2Int, int[]>();
 
     // queue data structures for rebuild throttling
     private readonly HashSet<Chunk> dirtyChunks = new HashSet<Chunk>();
@@ -76,6 +78,13 @@ public class WorldGenerator : MonoBehaviour
             if (pc != null) pc.enabled = false;
         }
 
+        // Attempt to load previously selected save (if any)
+        string loadSave = PlayerPrefs.GetString("LoadSaveName", "");
+        if (!string.IsNullOrEmpty(loadSave))
+        {
+            LoadWorld(loadSave);
+        }
+
         // Start the chunk update loop
         StartCoroutine(UpdateChunksLoop());
         StartCoroutine(WaitForSpawn());
@@ -91,8 +100,8 @@ public class WorldGenerator : MonoBehaviour
             int pZ = Mathf.FloorToInt(player.position.z / BlockData.ChunkWidth);
 
             Chunk chunk = FindChunkAt(pX, pZ);
-            // Check if chunk is loaded AND has a mesh (meaning it's processed)
-            if (chunk != null && chunk.GetComponent<MeshFilter>().sharedMesh != null && chunk.GetComponent<MeshFilter>().sharedMesh.vertexCount > 0)
+            // Check if chunk is loaded, has a mesh, and the collider is ready (meaning physics is safe)
+            if (chunk != null && chunk.GetComponent<MeshFilter>().sharedMesh != null && chunk.GetComponent<MeshFilter>().sharedMesh.vertexCount > 0 && chunk.IsColliderReady)
             {
                 // Find surface
                 int localX = Mathf.FloorToInt(player.position.x) - pX * BlockData.ChunkWidth;
@@ -110,6 +119,9 @@ public class WorldGenerator : MonoBehaviour
 
                 // Teleport
                 player.position = new Vector3(player.position.x, y + 2, player.position.z);
+
+                // Wait one fixed update so the physics engine registers the new MeshCollider
+                yield return new WaitForFixedUpdate();
 
                 // Enable
                 MonoBehaviour pc = player.GetComponent("PlayerController") as MonoBehaviour;
@@ -204,6 +216,10 @@ public class WorldGenerator : MonoBehaviour
         if (chunk != null)
         {
             // Initialize blocks ONLY (buildMesh = false)
+            int[] savedData = null;
+            var key = new Vector2Int(x, z);
+            if (savedChunkBlocks.TryGetValue(key, out var blocksData)) savedData = blocksData;
+
             chunk.Initialize(
                 x, z,
                 heightNoiseScale: noiseScale,
@@ -218,10 +234,17 @@ public class WorldGenerator : MonoBehaviour
                 caveOctaves: caveOctaves,
                 caveOffset: noiseOffset3D,
                 seed: seed,
-                buildMesh: false 
+                buildMesh: false,
+                savedBlockData: savedData
             );
-            chunkDict.Add(new Vector2Int(x, z), chunk);
+            chunkDict.Add(key, chunk);
             pendingChunks.Add(chunk);
+
+            // If we loaded saved data for this chunk, ensure it is marked modified so it gets updated
+            if (savedData != null)
+            {
+                chunk.isModified = true;
+            }
         }
     }
 
@@ -299,6 +322,107 @@ public class WorldGenerator : MonoBehaviour
         if (chunkDict.ContainsKey(key)) chunkDict.Remove(key);
         dirtyChunks.Remove(chunk);
         // rebuildQueue may still contain it; will be skipped when dequeued if null/unregistered
+    }
+
+    // Save current world (modified chunks, player, inventory) to save file
+    public void SaveWorld(string saveName = "")
+    {
+        string name = saveName;
+        if (string.IsNullOrEmpty(name)) name = PlayerPrefs.GetString("LoadSaveName", "");
+        if (string.IsNullOrEmpty(name)) name = "QuickSave_" + System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
+
+        GameSaveData data = new GameSaveData();
+        data.saveName = name;
+        data.lastPlayed = System.DateTime.Now.Ticks;
+        data.worldData = new WorldData();
+        data.worldData.seed = seed;
+
+        // Save modified chunks only
+        foreach (var kvp in chunkDict)
+        {
+            Chunk c = kvp.Value;
+            if (c == null) continue;
+            if (!c.isModified) continue;
+            ChunkData cd = new ChunkData();
+            cd.x = c.ChunkX;
+            cd.z = c.ChunkZ;
+            cd.blocks = c.GetBlockData();
+            data.worldData.modifiedChunks.Add(cd);
+        }
+
+        // Player
+        data.playerData = new PlayerData();
+        if (player != null)
+        {
+            data.playerData.position = new Vector3Data(player.position);
+            data.playerData.rotation = new Vector3Data(player.eulerAngles);
+            var pc = player.GetComponent<PlayerController>();
+            if (pc != null)
+            {
+                data.playerData.currentHealth = pc.currentHealth;
+                data.playerData.currentHunger = pc.currentHunger;
+            }
+        }
+
+        // Inventory
+        var inv = Object.FindFirstObjectByType<Inventory>();
+        if (inv != null) data.inventoryData = inv.GetInventoryData();
+
+        SaveManager.SaveGame(data);
+        PlayerPrefs.SetString("LoadSaveName", name);
+        Debug.Log($"World saved to {name}");
+    }
+
+    public void LoadWorld(string saveName)
+    {
+        if (string.IsNullOrEmpty(saveName)) return;
+        GameSaveData data = SaveManager.LoadGame(saveName);
+        if (data == null) return;
+
+        // Set seed if provided
+        if (data.worldData != null) seed = data.worldData.seed;
+
+        savedChunkBlocks.Clear();
+        if (data.worldData != null && data.worldData.modifiedChunks != null)
+        {
+            foreach (var cd in data.worldData.modifiedChunks)
+            {
+                if (cd == null) continue;
+                savedChunkBlocks[new Vector2Int(cd.x, cd.z)] = cd.blocks;
+
+                // If chunk already loaded, apply immediately
+                var key = new Vector2Int(cd.x, cd.z);
+                if (chunkDict.TryGetValue(key, out var c) && c != null)
+                {
+                    c.SetBlockData(cd.blocks);
+                    c.isModified = true;
+                    c.RecomputeSkylightAndUpdateMesh();
+                }
+            }
+        }
+
+        // Player
+        if (data.playerData != null && player != null)
+        {
+            player.position = data.playerData.position.ToVector3();
+            player.eulerAngles = data.playerData.rotation.ToVector3();
+            var pc = player.GetComponent<PlayerController>();
+            if (pc != null)
+            {
+                pc.currentHealth = data.playerData.currentHealth;
+                pc.currentHunger = data.playerData.currentHunger;
+            }
+        }
+
+        // Inventory
+        if (data.inventoryData != null)
+        {
+            var inv = Object.FindFirstObjectByType<Inventory>();
+            if (inv != null) inv.LoadInventoryData(data.inventoryData);
+        }
+
+        PlayerPrefs.SetString("LoadSaveName", saveName);
+        Debug.Log($"Loaded save: {saveName}");
     }
 
     // Find chunk by chunk coords

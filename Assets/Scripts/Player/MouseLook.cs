@@ -50,8 +50,8 @@ public class MouseLook : MonoBehaviour
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
         }
-        // Only lock/hide cursor on left-click when inventory is NOT open
-        else if (Input.GetMouseButtonDown(0) && (inventoryUI == null || !inventoryUI.IsInventoryOpen()))
+        // Only lock/hide cursor on left-click when inventory is NOT open AND game is not paused
+        else if (Input.GetMouseButtonDown(0) && (inventoryUI == null || !inventoryUI.IsInventoryOpen()) && !PauseMenu.IsPaused)
         {
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;

@@ -48,13 +48,44 @@ public static class BlockData
         new Vector3Int(1, 0, 0) // Right (+X)
     };
 
-    public static bool IsSolid(BlockType t) => t != BlockType.Air;
+    public static bool IsSolid(BlockType t)
+    {
+        switch (t)
+        {
+            case BlockType.Air:
+            case BlockType.CarrotStage0:
+            case BlockType.CarrotStage1:
+            case BlockType.CarrotStage2:
+            case BlockType.CarrotStage3:
+                return false;
+            default:
+                return true;
+        }
+    }
+
+    public static bool IsCrossMesh(BlockType t)
+    {
+        switch (t)
+        {
+            case BlockType.CarrotStage0:
+            case BlockType.CarrotStage1:
+            case BlockType.CarrotStage2:
+            case BlockType.CarrotStage3:
+                return true;
+            default:
+                return false;
+        }
+    }
     
     public static bool IsOpaque(BlockType type)
     {
         switch (type)
         {
             case BlockType.Air:
+            case BlockType.CarrotStage0:
+            case BlockType.CarrotStage1:
+            case BlockType.CarrotStage2:
+            case BlockType.CarrotStage3:
                 return false;
             // Treat the following as non-opaque for skylight propagation
             case BlockType.Water:
@@ -76,6 +107,7 @@ public static class BlockData
         {
             case BlockType.Dirt:
             case BlockType.Grass:
+            case BlockType.Farmland:
                 return 0.8f;
             case BlockType.Sand:
                 return 0.9f;
@@ -91,6 +123,11 @@ public static class BlockData
                 return 6.0f;
             case BlockType.Leaves:
                 return 0.6f;
+            case BlockType.CarrotStage0:
+            case BlockType.CarrotStage1:
+            case BlockType.CarrotStage2:
+            case BlockType.CarrotStage3:
+                return 0.0f; // Instabreak
             case BlockType.Bedrock:
                 return float.PositiveInfinity; // unbreakable
             default:
@@ -101,5 +138,19 @@ public static class BlockData
     public static bool IsBreakable(BlockType type)
     {
         return type != BlockType.Bedrock;
+    }
+
+    public static bool IsCrop(BlockType type)
+    {
+        switch (type)
+        {
+            case BlockType.CarrotStage0:
+            case BlockType.CarrotStage1:
+            case BlockType.CarrotStage2:
+            case BlockType.CarrotStage3:
+                return true;
+            default:
+                return false;
+        }
     }
 }
